@@ -1,0 +1,1753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp AI Bot — Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #080b12;
+      color: #e6edf3;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 240px;
+      background: #0d1117;
+      border-right: 1px solid rgba(37,211,102,0.12);
+      display: flex;
+      flex-direction: column;
+      padding: 20px 0;
+      position: fixed;
+      height: 100vh;
+      overflow-y: auto;
+    }
+    .sidebar-header {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid rgba(37,211,102,0.12);
+      margin-bottom: 16px;
+    }
+    .sidebar-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e6edf3;
+      margin-bottom: 8px;
+    }
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #f85149;
+    }
+    .status-dot.online { background: #25D366; }
+    .nav-links {
+      flex: 1;
+      padding: 0 12px;
+    }
+    .nav-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: #8b949e;
+      font-size: 14px;
+      transition: all 0.2s;
+      margin-bottom: 2px;
+      text-decoration: none;
+    }
+    .nav-link:hover { background: rgba(37,211,102,0.08); color: #e6edf3; }
+    .nav-link.active { background: rgba(37,211,102,0.12); color: #25D366; }
+    .nav-link .icon { font-size: 18px; width: 24px; text-align: center; }
+    .nav-bottom {
+      padding: 0 12px;
+      border-top: 1px solid rgba(37,211,102,0.12);
+      padding-top: 12px;
+    }
+    .nav-link.logout { color: #f85149; }
+    .nav-link.logout:hover { background: rgba(248,81,73,0.1); }
+
+    /* Main */
+    .main {
+      flex: 1;
+      margin-left: 240px;
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .main-content { flex: 1; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+    .section-header .icon { font-size: 24px; }
+
+    .card {
+      background: #161b22;
+      border: 1px solid rgba(37,211,102,0.12);
+      border-radius: 12px;
+      padding: 24px;
+    }
+
+    label {
+      display: block;
+      color: #8b949e;
+      font-size: 13px;
+      margin-bottom: 6px;
+      margin-top: 16px;
+    }
+    label:first-child { margin-top: 0; }
+
+    input[type="text"], input[type="password"], textarea {
+      width: 100%;
+      padding: 10px 14px;
+      background: #0d1117;
+      border: 1px solid rgba(37,211,102,0.2);
+      border-radius: 8px;
+      color: #e6edf3;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, textarea:focus { border-color: #25D366; }
+    textarea { resize: vertical; min-height: 150px; }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-primary { background: #25D366; color: #fff; }
+    .btn-primary:hover { background: #20bd5a; }
+    .btn-danger { background: #f85149; color: #fff; }
+    .btn-danger:hover { background: #da3633; }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid rgba(37,211,102,0.3);
+      color: #25D366;
+    }
+    .btn-outline:hover { background: rgba(37,211,102,0.1); }
+    .btn-full { width: 100%; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+    /* Toggle Switch */
+    .toggle-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #161b22;
+      border: 1px solid rgba(37,211,102,0.12);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 12px;
+    }
+    .toggle-info { flex: 1; margin-right: 16px; }
+    .toggle-info .title { font-size: 15px; font-weight: 600; color: #e6edf3; }
+    .toggle-info .desc { font-size: 13px; color: #8b949e; margin-top: 4px; }
+    .toggle-info .note { font-size: 12px; color: #f85149; margin-top: 4px; }
+    .toggle-switch {
+      position: relative;
+      width: 48px;
+      height: 26px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { display: none; }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: #30363d;
+      border-radius: 13px;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background: #fff;
+      border-radius: 50%;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.3s;
+    }
+    .toggle-switch input:checked + .toggle-slider { background: #25D366; }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(22px); }
+
+    /* Table */
+    .table-wrapper { overflow-x: auto; margin-top: 16px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 12px 16px;
+      text-align: left;
+      border-bottom: 1px solid rgba(37,211,102,0.08);
+      font-size: 13px;
+    }
+    th { color: #8b949e; font-weight: 500; }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-active { background: rgba(37,211,102,0.15); color: #25D366; }
+    .badge-disabled { background: rgba(139,148,158,0.15); color: #8b949e; }
+    .badge-error { background: rgba(248,81,73,0.15); color: #f85149; }
+    .badge-ok { background: rgba(37,211,102,0.15); color: #25D366; }
+    .badge-warn { background: rgba(210,153,34,0.15); color: #d29922; }
+    .status-row { display: flex; align-items: center; gap: 6px; }
+    .status-icon { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .status-icon.ok { background: #25D366; }
+    .status-icon.error { background: #f85149; }
+    .status-icon.unknown { background: #8b949e; }
+    .key-error-msg { font-size: 11px; color: #f85149; margin-top: 2px; max-width: 200px; }
+    .contact-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; background: #0d1117; border-radius: 8px;
+      margin-bottom: 6px; transition: background 0.2s;
+    }
+    .contact-item:hover { background: #161b22; }
+    .contact-info { flex: 1; }
+    .contact-name { font-size: 14px; color: #e6edf3; font-weight: 500; }
+    .contact-number { font-size: 12px; color: #8b949e; margin-top: 2px; }
+    .contact-actions { display: flex; gap: 6px; }
+    .contact-blocked { opacity: 0.5; }
+    .contact-blocked .contact-name::after { content: ' (BLOCKED)'; color: #f85149; font-size: 11px; }
+
+    .info-banner {
+      background: rgba(37,211,102,0.08);
+      border: 1px solid rgba(37,211,102,0.15);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #8b949e;
+      margin-bottom: 16px;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #8b949e;
+      font-size: 14px;
+    }
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal {
+      background: #161b22;
+      border: 1px solid rgba(37,211,102,0.15);
+      border-radius: 12px;
+      padding: 24px;
+      width: 450px;
+      max-width: 90vw;
+    }
+    .modal h3 { margin-bottom: 16px; font-size: 18px; }
+    .modal .helper { font-size: 12px; color: #8b949e; margin-top: 4px; }
+    .modal-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      margin-top: 20px;
+    }
+
+    /* Block List */
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .panel { }
+    .panel h3 { font-size: 15px; margin-bottom: 12px; color: #e6edf3; }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .input-row input { flex: 1; }
+    .block-list { list-style: none; }
+    .block-list li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #0d1117;
+      border-radius: 6px;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+    .block-list .remove-btn {
+      background: none;
+      border: none;
+      color: #f85149;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .panel .helper { font-size: 12px; color: #8b949e; margin-top: 8px; }
+
+    .site-footer {
+      text-align: center;
+      padding: 16px 0;
+      margin-top: 32px;
+      font-size: 12px;
+      color: #555;
+      border-top: 1px solid rgba(37,211,102,0.08);
+    }
+    .sel {
+      width: 100%; padding: 10px 14px; background: #0d1117;
+      border: 1px solid rgba(37,211,102,0.2); border-radius: 8px;
+      color: #e6edf3; font-size: 14px; outline: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b949e'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center;
+    }
+    .sel:focus { border-color: #25D366; }
+    .api-card {
+      background: #161b22; border: 1px solid rgba(37,211,102,0.12);
+      border-radius: 12px; padding: 16px; margin-bottom: 12px;
+      transition: border-color 0.2s;
+    }
+    .api-card:hover { border-color: rgba(37,211,102,0.3); }
+    .api-card.inactive { opacity: 0.6; }
+    .api-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .api-card-title { font-size: 16px; font-weight: 600; color: #e6edf3; }
+    .api-card-meta { display: flex; gap: 16px; font-size: 12px; color: #8b949e; margin-bottom: 12px; flex-wrap: wrap; }
+    .api-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    /* Password */
+    .strength {
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    .strength.weak { color: #f85149; }
+    .strength.fair { color: #d29922; }
+    .strength.strong { color: #25D366; }
+
+    /* Toast */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .toast {
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #fff;
+      animation: slideIn 0.3s ease, fadeOut 0.3s ease 2.7s;
+      min-width: 250px;
+    }
+    .toast-success { background: #25D366; }
+    .toast-error { background: #f85149; }
+    @keyframes slideIn {
+      from { transform: translateX(100px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes fadeOut {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 768px) {
+      .sidebar { width: 60px; overflow: hidden; }
+      .sidebar-header h2, .nav-link span:not(.icon), .status-indicator span:not(.status-dot) { display: none; }
+      .main { margin-left: 60px; padding: 16px; }
+      .panels { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <h2 id="botNameSidebar">AI Assistant</h2>
+      <div class="status-indicator">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Offline</span>
+      </div>
+    </div>
+    <div class="nav-links">
+      <a class="nav-link active" data-tab="settings" onclick="switchTab('settings', this)">
+        <span class="icon">⚙️</span><span>Bot Settings</span>
+      </a>
+      <a class="nav-link" data-tab="replies" onclick="switchTab('replies', this)">
+        <span class="icon">💬</span><span>Reply Settings</span>
+      </a>
+      <a class="nav-link" data-tab="aiapis" onclick="switchTab('aiapis', this)">
+        <span class="icon">🔑</span><span>AI API Manager</span>
+      </a>
+      <a class="nav-link" data-tab="blocklist" onclick="switchTab('blocklist', this)">
+        <span class="icon">🚫</span><span>Block List</span>
+      </a>
+      <a class="nav-link" data-tab="whatsapp" onclick="switchTab('whatsapp', this)">
+        <span class="icon">📱</span><span>WhatsApp Login</span>
+      </a>
+      <a class="nav-link" data-tab="logs" onclick="switchTab('logs', this)">
+        <span class="icon">📋</span><span>Live Logs</span>
+      </a>
+      <a class="nav-link" data-tab="update" onclick="switchTab('update', this)">
+        <span class="icon">⬇️</span><span>Update</span>
+      </a>
+      <a class="nav-link" data-tab="adminusers" onclick="switchTab('adminusers', this)">
+        <span class="icon">👤</span><span>Admin Users</span>
+      </a>
+      <a class="nav-link" data-tab="password" onclick="switchTab('password', this)">
+        <span class="icon">🔐</span><span>Change Password</span>
+      </a>
+    </div>
+    <div class="nav-bottom">
+      <a class="nav-link" onclick="window.location.reload(true)" style="color:#8b949e;">
+        <span class="icon">🔄</span><span>Refresh</span>
+      </a>
+      <a class="nav-link logout" onclick="logout()">
+        <span class="icon">🚪</span><span>Logout</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="main-content">
+    <!-- Tab: Bot Settings -->
+    <div class="tab active" id="tab-settings">
+      <div class="section-header"><span class="icon">⚙️</span> Bot Settings</div>
+      <div class="toggle-card" style="margin-bottom:20px; border-color: rgba(37,211,102,0.3);">
+        <div class="toggle-info">
+          <div class="title" style="font-size:17px;">🟢 Bot Power</div>
+          <div class="desc">ON = Bot online, replies to messages &nbsp;|&nbsp; OFF = Bot offline, ignores all messages</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleBotEnabled" onchange="toggleBotEnabled()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="card">
+        <label>Bot Name</label>
+        <input type="text" id="botName" placeholder="e.g. AI Assistant">
+        <label>AI Personality Prompt</label>
+        <textarea id="botPrompt" placeholder="Describe how the bot should behave and respond..."></textarea>
+        <br><br>
+        <button class="btn btn-primary btn-full" onclick="saveSettings()">Save Settings</button>
+      </div>
+      <div class="card" style="margin-top:20px; border-color: rgba(248,81,73,0.3);">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:15px;font-weight:600;color:#f85149;">⚠️ Factory Reset</div>
+            <div style="font-size:13px;color:#8b949e;margin-top:4px;">Clear ALL data — admin users, API keys, blocklist, password, session. Bot will restart fresh.</div>
+          </div>
+          <button class="btn btn-danger" onclick="factoryReset()" id="factoryResetBtn">Factory Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Reply Settings -->
+    <div class="tab" id="tab-replies">
+      <div class="section-header"><span class="icon">💬</span> Reply Settings</div>
+      <div class="toggle-card">
+        <div class="toggle-info">
+          <div class="title">📥 Private Message Replies</div>
+          <div class="desc">Reply to direct messages sent to your number</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleInbox" onchange="saveReplySettings()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="toggle-card" style="margin-bottom:24px;">
+        <div class="toggle-info">
+          <div class="title">👥 Group Message Replies</div>
+          <div class="desc">Reply to messages in WhatsApp groups</div>
+          <div class="note">Caution: enabling this will reply in ALL groups (unless blocked below)</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleGroups" onchange="saveReplySettings()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div style="border-top:1px solid rgba(37,211,102,0.12);padding-top:24px;">
+        <div class="section-header" style="font-size:17px;"><span class="icon">📨</span> Fallback Messages</div>
+        <div class="info-banner">
+          When ALL AI APIs fail, a random message from this list is sent to the user. Add or edit messages to customize bot behavior during outages.
+        </div>
+        <div class="card" style="max-width:700px;margin-bottom:16px;">
+          <label>Add New Message</label>
+          <textarea id="newFallbackMsg" placeholder="Type a fallback message..." style="min-height:80px;"></textarea>
+          <br>
+          <button class="btn btn-primary btn-sm" onclick="addFallbackMessage()">+ Add Message</button>
+        </div>
+        <div class="card" style="max-width:700px;">
+          <h3 style="margin-bottom:12px;">Messages <span class="badge badge-active" id="fallbackCount">0</span></h3>
+          <div id="fallbackList"></div>
+          <div class="empty-state" id="fallbackEmpty">No custom messages. Default messages will be used.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: AI API Manager -->
+    <div class="tab" id="tab-aiapis">
+      <div class="section-header"><span class="icon">🔑</span> AI API Manager</div>
+      <div class="info-banner">
+        Manage multiple AI providers with automatic fallback. APIs are tried in priority order — if one fails, the next is used automatically.
+      </div>
+      <div class="header-row">
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-primary btn-sm" onclick="showAddAPIModal()">+ Add New API</button>
+          <button class="btn btn-outline btn-sm" onclick="loadAIApis()">🔄 Refresh</button>
+        </div>
+      </div>
+      <div id="aiApisList"></div>
+      <div class="empty-state" id="aiApisEmpty">No AI APIs configured yet. Add your first API to get started.</div>
+    </div>
+
+    <!-- Tab: Block List -->
+    <div class="tab" id="tab-blocklist">
+      <div class="section-header"><span class="icon">🚫</span> Block List</div>
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <input type="text" id="searchContactInput" placeholder="🔍 Search contacts by name or number..." oninput="searchContacts()" style="flex:1;">
+          <button class="btn btn-outline btn-sm" onclick="loadAllContacts()">Show All</button>
+        </div>
+        <div id="contactSearchResults"></div>
+        <div class="empty-state" id="contactSearchEmpty">Type a name or number to search contacts</div>
+      </div>
+      <div class="panels">
+        <div class="panel card">
+          <h3>🚫 Blocked Numbers <span id="blockedNumCount" class="badge badge-disabled">0</span></h3>
+          <div class="input-row">
+            <input type="text" id="blockNumberInput" placeholder="8801XXXXXXXXX (country code, no +)">
+            <button class="btn btn-danger btn-sm" onclick="blockNumber()">Block</button>
+          </div>
+          <ul class="block-list" id="blockedNumbers"></ul>
+          <div class="empty-state" id="numbersEmpty">No blocked numbers</div>
+        </div>
+        <div class="panel card">
+          <h3>🚫 Blocked Groups <span id="blockedGrpCount" class="badge badge-disabled">0</span></h3>
+          <div class="input-row">
+            <input type="text" id="blockGroupInput" placeholder="Group ID from WhatsApp">
+            <button class="btn btn-danger btn-sm" onclick="blockGroup()">Block</button>
+          </div>
+          <ul class="block-list" id="blockedGroups"></ul>
+          <div class="empty-state" id="groupsEmpty">No blocked groups</div>
+          <p class="helper">Tip: Search contacts above to find and block numbers quickly.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Admin Users -->
+    <div class="tab" id="tab-adminusers">
+      <div class="section-header"><span class="icon">👤</span> Admin Users</div>
+      <div class="info-banner">
+        Add WhatsApp numbers as admin. Admin users can control the bot using chat commands like <b>/offbot</b>, <b>/onbot</b>, <b>/block</b>, <b>/blocklist</b>, <b>/unblock</b>, <b>/gplist</b>
+      </div>
+      <div class="card" style="max-width:600px;margin-bottom:16px;">
+        <label>WhatsApp Number (with country code)</label>
+        <input type="text" id="adminUserNumber" placeholder="8801XXXXXXXXX">
+        <label>Name (optional)</label>
+        <input type="text" id="adminUserName" placeholder="e.g. Owner, Main Admin">
+        <br><br>
+        <button class="btn btn-primary btn-full" onclick="addAdminUser()">+ Add Admin User</button>
+      </div>
+      <div class="card" style="max-width:600px;">
+        <h3 style="margin-bottom:12px;">Admin Users List</h3>
+        <div id="adminUsersList"></div>
+        <div class="empty-state" id="adminUsersEmpty">No admin users added yet</div>
+      </div>
+      <div class="card" style="max-width:600px;margin-top:16px;">
+        <h3 style="margin-bottom:12px;">📋 Available Commands</h3>
+        <div style="font-size:13px;color:#8b949e;line-height:2;">
+          <code style="color:#25D366">/offbot</code> — Bot off kore, kono reply dibe na<br>
+          <code style="color:#25D366">/onbot</code> — Bot on kore, reply dite shuru korbe<br>
+          <code style="color:#25D366">/block 8801XXXXXXXXX</code> — Number block kore<br>
+          <code style="color:#25D366">/blocklist</code> — Shob blocked numbers/groups dekhabe<br>
+          <code style="color:#25D366">/unblock 8801XXXXXXXXX</code> — Number unblock kore<br>
+          <code style="color:#25D366">/unblock 120363XXX@g.us</code> — Group unblock kore<br>
+          <code style="color:#25D366">/gplist</code> — Shob groups name + ID soho dekhabe
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: WhatsApp Login -->
+    <div class="tab" id="tab-whatsapp">
+      <div class="section-header"><span class="icon">📱</span> WhatsApp Login</div>
+      <div class="card" style="max-width:500px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+          <div class="status-dot" id="waStatusDot"></div>
+          <span id="waStatusText" style="font-size:15px;font-weight:600;">Checking...</span>
+        </div>
+
+        <div id="waDisconnected" style="display:none;">
+          <div class="info-banner" style="background:rgba(248,81,73,0.08);border-color:rgba(248,81,73,0.15);">
+            ⚠️ WhatsApp is not connected. Enter your number below to get a pairing code.
+          </div>
+          <label>Your WhatsApp Number (with country code)</label>
+          <input type="text" id="waPhoneNumber" placeholder="8801XXXXXXXXX" maxlength="15">
+          <br><br>
+          <button class="btn btn-primary btn-full" onclick="requestPairingCode()" id="pairBtn">
+            🔑 Get Pairing Code
+          </button>
+          <div id="pairingResult" style="display:none;margin-top:20px;text-align:center;">
+            <div class="info-banner" style="background:rgba(37,211,102,0.08);border-color:rgba(37,211,102,0.15);">
+              Your pairing code:
+            </div>
+            <div id="pairingCode" style="font-size:32px;font-weight:700;letter-spacing:4px;color:#25D366;margin:16px 0;"></div>
+            <div style="font-size:13px;color:#8b949e;line-height:1.6;">
+              1. Open WhatsApp on your phone<br>
+              2. Go to <b>Settings → Linked Devices</b><br>
+              3. Tap <b>Link a Device</b><br>
+              4. Tap <b>Link with Phone Number</b><br>
+              5. Enter the code above
+            </div>
+          </div>
+        </div>
+
+        <div id="waConnected" style="display:none;">
+          <div class="info-banner">
+            ✅ WhatsApp is connected and working. Bot is online.
+          </div>
+          <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+            <button class="btn btn-danger" onclick="logoutWhatsApp()">🚪 Logout</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap;padding-top:16px;border-top:1px solid rgba(255,255,255,0.06);">
+          <button class="btn btn-outline" onclick="restartWhatsApp()">🔄 Restart WhatsApp</button>
+          <button class="btn btn-primary" onclick="softRestart()">⚡ Soft Restart</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Live Logs -->
+    <div class="tab" id="tab-logs">
+      <div class="section-header"><span class="icon">📋</span> Live Logs</div>
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);">
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-sm btn-outline" onclick="clearLogs()">🗑 Clear</button>
+            <button class="btn btn-sm btn-outline" id="logPauseBtn" onclick="toggleLogPause()">⏸ Pause</button>
+          </div>
+          <div style="font-size:12px;color:#8b949e;" id="logCount">0 logs</div>
+        </div>
+        <div id="logContainer" style="height:500px;overflow-y:auto;background:#0d1117;font-family:'Fira Code',monospace;font-size:12px;line-height:1.6;padding:12px 16px;"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Update -->
+    <div class="tab" id="tab-update">
+      <div class="section-header"><span class="icon">⬇️</span> Update Bot</div>
+      <div class="card" style="max-width:500px;">
+        <div style="margin-bottom:20px;">
+          <button class="btn btn-primary btn-full" onclick="gitUpdate()" id="gitUpdateBtn">
+            ⬇️ Pull Update from GitHub & Restart
+          </button>
+          <div style="font-size:12px;color:#8b949e;margin-top:8px;">
+            Pulls latest code from GitHub, installs deps, and restarts bot. Your session & API keys are preserved.
+          </div>
+        </div>
+        <hr style="border-color:rgba(255,255,255,0.06);margin:20px 0;">
+        <div class="toggle-card">
+          <div class="toggle-info">
+            <div class="title">🔄 Auto-Update</div>
+            <div class="desc">Periodically check GitHub for new updates and apply automatically</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggleAutoUpdate" onchange="toggleAutoUpdate()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div style="margin-top:16px;">
+          <label>Check Interval (minutes)</label>
+          <input type="number" id="autoUpdateInterval" min="5" max="1440" value="30" style="width:120px;" onchange="saveAutoUpdate()">
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Change Password -->
+    <div class="tab" id="tab-password">
+      <div class="section-header"><span class="icon">🔐</span> Change Password</div>
+      <div class="card" style="max-width:450px;">
+        <label>Current Password</label>
+        <input type="password" id="currentPwd" placeholder="Enter current password">
+        <label>New Password</label>
+        <input type="password" id="newPwd" placeholder="Enter new password" oninput="checkStrength()">
+        <label>Confirm New Password</label>
+        <input type="password" id="confirmPwd" placeholder="Confirm new password">
+        <div class="strength" id="pwdStrength"></div>
+        <br>
+        <button class="btn btn-primary btn-full" onclick="changePassword()">Update Password</button>
+      </div>
+    </div>
+    </div>
+
+    <div class="site-footer">
+      Developed by <b style="color:#25D366;">Tarif Ahmed</b> (infinityX) &nbsp;|&nbsp;
+      <a href="https://t.me/infinityxbd" target="_blank" style="color:#25D366;text-decoration:none;">@infinityxbd</a>
+    </div>
+  </div>
+
+  <!-- Modal: Add/Edit AI API -->
+  <div class="modal-overlay" id="aiApiModal">
+    <div class="modal" style="max-width:550px;max-height:90vh;overflow-y:auto;">
+      <h3 id="aiApiModalTitle">Add AI API</h3>
+      <input type="hidden" id="aiApiEditId">
+      <label>API Name</label>
+      <input type="text" id="aiApiName" placeholder="e.g. DeepSeek API, Gemini Flash">
+      <label>Provider Type</label>
+      <select id="aiApiProvider" class="sel" onchange="onProviderTypeChange()">
+        <option value="openai-compatible">OpenAI Compatible</option>
+        <option value="openai-official">OpenAI Official</option>
+        <option value="gemini">Google Gemini</option>
+        <option value="anthropic">Anthropic Claude</option>
+        <option value="1min-ai">1min.ai</option>
+        <option value="custom-rest">Custom REST API</option>
+        <option value="custom-json">Custom JSON API</option>
+      </select>
+      <label>API Base URL / Endpoint</label>
+      <input type="text" id="aiApiEndpoint" placeholder="https://api.example.com/v1">
+      <label>API Key</label>
+      <input type="password" id="aiApiKeyValue" placeholder="sk-...">
+      <label>Model Name</label>
+      <input type="text" id="aiApiModel" placeholder="e.g. gpt-4, gemini-1.5-flash">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div><label>Auth Type</label>
+          <select id="aiApiAuthType" class="sel">
+            <option value="bearer">Bearer Token</option>
+            <option value="api-key-header">API Key Header</option>
+            <option value="api-key-upper">API-KEY Header</option>
+            <option value="x-api-key">X-API-Key</option>
+            <option value="basic">Basic Auth</option>
+            <option value="api-key-query">Key in Query</option>
+            <option value="none">No Auth</option>
+          </select>
+        </div>
+        <div><label>Priority</label>
+          <input type="number" id="aiApiPriority" min="1" value="1"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div><label>Max Tokens</label>
+          <input type="number" id="aiApiMaxTokens" min="1" value="1024"></div>
+        <div><label>Temperature</label>
+          <input type="number" id="aiApiTemperature" min="0" max="2" step="0.1" value="0.7"></div>
+      </div>
+      <label>Custom System Prompt (optional)</label>
+      <textarea id="aiApiSystemPrompt" placeholder="Override bot prompt for this API..." style="min-height:60px;"></textarea>
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;color:#8b949e;font-size:13px;">⚙️ Advanced Settings</summary>
+        <div style="margin-top:12px;">
+          <label>HTTP Method</label>
+          <select id="aiApiHttpMethod" class="sel">
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+          </select>
+          <label>Custom Headers (JSON)</label>
+          <textarea id="aiApiCustomHeaders" placeholder='{"X-Custom": "value"}' style="min-height:50px;font-family:monospace;font-size:12px;"></textarea>
+          <label>Request Template (JSON, use &#123;&#123;VARIABLES&#125;&#125;)</label>
+          <textarea id="aiApiRequestTemplate" style="min-height:60px;font-family:monospace;font-size:12px;"></textarea>
+          <div class="helper">Variables: &#123;&#123;API_KEY&#125;&#125; &#123;&#123;MODEL&#125;&#125; &#123;&#123;MESSAGE&#125;&#125; &#123;&#123;SYSTEM_PROMPT&#125;&#125; &#123;&#123;MAX_TOKENS&#125;&#125; &#123;&#123;TEMPERATURE&#125;&#125; &#123;&#123;CONVERSATION&#125;&#125;</div>
+          <label>Response Path (dot notation)</label>
+          <input type="text" id="aiApiResponsePath" placeholder="choices[0].message.content" style="font-family:monospace;font-size:12px;">
+          <div class="helper">Examples: choices[0].message.content | candidates[0].content.parts[0].text | content[0].text</div>
+        </div>
+      </details>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="hideAIApiModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveAIApi()" id="aiApiSaveBtn">Add API</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Test Result -->
+  <div class="modal-overlay" id="testResultModal">
+    <div class="modal" style="max-width:450px;">
+      <h3>🧪 API Test Result</h3>
+      <div id="testResultContent"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="document.getElementById('testResultModal').classList.remove('show')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    // Toast
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    // Tab switching
+    function switchTab(tab, el) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+      document.getElementById('tab-' + tab).classList.add('active');
+      el.classList.add('active');
+      if (tab === 'replies') { loadSettings(); loadFallbackMessages(); }
+      if (tab === 'blocklist') loadBlocklist();
+      if (tab === 'whatsapp') checkWhatsAppStatus();
+      if (tab === 'adminusers') loadAdminUsers();
+      if (tab === 'aiapis') loadAIApis();
+    }
+
+    // Status polling
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/admin/api/status', { credentials: 'same-origin' });
+        const data = await res.json();
+        const dot = document.getElementById('statusDot');
+        const text = document.getElementById('statusText');
+        if (data.status === 'online') {
+          dot.classList.add('online');
+          text.textContent = 'Online';
+        } else {
+          dot.classList.remove('online');
+          text.textContent = 'Offline';
+        }
+      } catch(e) {}
+    }
+
+    // Admin Users
+    async function loadAdminUsers() {
+      try {
+        const res = await fetch('/admin/api/admin-users', { credentials: 'same-origin' });
+        const users = await res.json();
+        const list = document.getElementById('adminUsersList');
+        const empty = document.getElementById('adminUsersEmpty');
+
+        if (users.length === 0) {
+          list.innerHTML = '';
+          empty.style.display = 'block';
+          return;
+        }
+        empty.style.display = 'none';
+        list.innerHTML = users.map(u => `
+          <div class="contact-item">
+            <div class="contact-info">
+              <div class="contact-name">👤 ${u.name}</div>
+              <div class="contact-number">${u.number.replace('@c.us','')}</div>
+            </div>
+            <div class="contact-actions">
+              <button class="btn btn-danger btn-sm" onclick="deleteAdminUser('${u.id}')">Remove</button>
+            </div>
+          </div>
+        `).join('');
+      } catch(e) {}
+    }
+
+    async function addAdminUser() {
+      const number = document.getElementById('adminUserNumber').value.trim();
+      const name = document.getElementById('adminUserName').value.trim();
+      if (!number) return showToast('Enter a phone number', 'error');
+      try {
+        const res = await fetch('/admin/api/admin-users', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ number, name })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Admin user added!');
+          document.getElementById('adminUserNumber').value = '';
+          document.getElementById('adminUserName').value = '';
+          loadAdminUsers();
+        } else {
+          showToast(data.error || 'Failed', 'error');
+        }
+      } catch(e) { showToast('Failed to add admin user', 'error'); }
+    }
+
+    async function deleteAdminUser(id) {
+      if (!confirm('Remove this admin user?')) return;
+      await fetch('/admin/api/admin-users/' + id, { method: 'DELETE', credentials: 'same-origin' });
+      showToast('Admin user removed');
+      loadAdminUsers();
+    }
+
+    // WhatsApp Login
+    async function checkWhatsAppStatus() {
+      try {
+        const res = await fetch('/admin/api/whatsapp/status', { credentials: 'same-origin' });
+        const data = await res.json();
+        const dot = document.getElementById('waStatusDot');
+        const text = document.getElementById('waStatusText');
+        const disconnected = document.getElementById('waDisconnected');
+        const connected = document.getElementById('waConnected');
+
+        disconnected.style.display = 'none';
+        connected.style.display = 'none';
+
+        if (data.connected) {
+          dot.classList.add('online');
+          text.textContent = 'Connected';
+          text.style.color = '#25D366';
+          connected.style.display = 'block';
+        } else {
+          dot.classList.remove('online');
+          text.textContent = 'Not Connected';
+          text.style.color = '#f85149';
+          disconnected.style.display = 'block';
+        }
+      } catch(e) {
+        document.getElementById('waStatusText').textContent = 'Error checking status';
+      }
+    }
+
+    async function requestPairingCode() {
+      const phone = document.getElementById('waPhoneNumber').value.trim();
+      if (!phone) return showToast('Enter your phone number', 'error');
+      const btn = document.getElementById('pairBtn');
+      btn.textContent = '⏳ Getting code...';
+      btn.disabled = true;
+      document.getElementById('pairingResult').style.display = 'none';
+      try {
+        const res = await fetch('/admin/api/whatsapp/pair', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber: phone })
+        });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('pairingCode').textContent = data.code;
+          document.getElementById('pairingResult').style.display = 'block';
+          showToast('Pairing code generated! Enter it on your phone.');
+          startPairingPoll();
+        } else {
+          showToast(data.error || 'Failed to get code', 'error');
+        }
+      } catch(e) {
+        showToast('Failed to request pairing code. Retry.', 'error');
+      }
+      btn.textContent = '🔑 Get Pairing Code';
+      btn.disabled = false;
+    }
+
+    let pairingPollInterval = null;
+    function startPairingPoll() {
+      if (pairingPollInterval) clearInterval(pairingPollInterval);
+      pairingPollInterval = setInterval(async () => {
+        try {
+          const res = await fetch('/admin/api/whatsapp/status', { credentials: 'same-origin' });
+          const data = await res.json();
+          if (data.connected) {
+            clearInterval(pairingPollInterval);
+            pairingPollInterval = null;
+            document.getElementById('pairingResult').style.display = 'none';
+            checkWhatsAppStatus();
+            showToast('✅ WhatsApp connected!');
+          }
+        } catch(e) {}
+      }, 3000);
+    }
+
+    async function logoutWhatsApp() {
+      if (!confirm('Logout WhatsApp? Bot will go offline and you can pair a new number.')) return;
+      if (pairingPollInterval) { clearInterval(pairingPollInterval); pairingPollInterval = null; }
+      try {
+        await fetch('/admin/api/whatsapp/logout', {
+          method: 'POST', credentials: 'same-origin'
+        });
+        showToast('WhatsApp logged out');
+        document.getElementById('pairingResult').style.display = 'none';
+        document.getElementById('waConnected').style.display = 'none';
+        document.getElementById('waDisconnected').style.display = 'block';
+        document.getElementById('waStatusDot').classList.remove('online');
+        document.getElementById('waStatusText').textContent = 'Not Connected';
+        document.getElementById('waStatusText').style.color = '#f85149';
+        setTimeout(checkWhatsAppStatus, 5000);
+      } catch(e) { showToast('Failed to logout', 'error'); }
+    }
+
+    async function restartWhatsApp() {
+      showToast('Restarting WhatsApp...');
+      try {
+        await fetch('/admin/api/whatsapp/restart', {
+          method: 'POST', credentials: 'same-origin'
+        });
+        setTimeout(checkWhatsAppStatus, 5000);
+      } catch(e) { showToast('Failed to restart', 'error'); }
+    }
+
+    // ─── Soft Restart ───
+    async function softRestart() {
+      if (!confirm('Soft restart? Bot will restart but session & API keys stay safe.')) return;
+      showToast('Soft restarting bot...');
+      try {
+        await fetch('/admin/api/soft-restart', {
+          method: 'POST', credentials: 'same-origin'
+        });
+        setTimeout(() => { window.location.reload(); }, 4000);
+      } catch(e) { showToast('Restart failed', 'error'); }
+    }
+
+    // ─── Live Logs ───
+    let logEventSource = null;
+    let logPaused = false;
+    let logEntries = [];
+
+    function connectLogs() {
+      if (logEventSource) logEventSource.close();
+      logEventSource = new EventSource('/admin/api/logs/stream');
+      logEventSource.onmessage = (e) => {
+        if (logPaused) return;
+        try {
+          const entry = JSON.parse(e.data);
+          logEntries.push(entry);
+          if (logEntries.length > 100) logEntries.shift();
+          appendLogEntry(entry);
+        } catch(err) {}
+      };
+      logEventSource.onerror = () => { setTimeout(connectLogs, 3000); };
+    }
+
+    function appendLogEntry(entry) {
+      const container = document.getElementById('logContainer');
+      if (!container) return;
+      const colors = { info: '#8b949e', error: '#f85149', warn: '#d29922' };
+      const line = document.createElement('div');
+      line.style.color = colors[entry.level] || '#8b949e';
+      const prefix = entry.level === 'error' ? '❌' : entry.level === 'warn' ? '⚠️' : '▸';
+      line.textContent = `${entry.time} ${prefix} ${entry.msg}`;
+      container.appendChild(line);
+      if (container.children.length > 100) container.removeChild(container.firstChild);
+      container.scrollTop = container.scrollHeight;
+      document.getElementById('logCount').textContent = logEntries.length + ' logs';
+    }
+
+    function clearLogs() {
+      logEntries = [];
+      const container = document.getElementById('logContainer');
+      if (container) container.innerHTML = '';
+      document.getElementById('logCount').textContent = '0 logs';
+    }
+
+    function toggleLogPause() {
+      logPaused = !logPaused;
+      document.getElementById('logPauseBtn').textContent = logPaused ? '▶ Resume' : '⏸ Pause';
+    }
+
+    // ─── Git Update ───
+    async function gitUpdate() {
+      if (!confirm('Pull latest from GitHub & restart? Session & API keys stay safe.')) return;
+      const btn = document.getElementById('gitUpdateBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Updating...';
+      showToast('Pulling from GitHub...');
+      try {
+        await fetch('/admin/api/git-update', {
+          method: 'POST', credentials: 'same-origin'
+        });
+        setTimeout(() => { window.location.reload(); }, 8000);
+      } catch(e) { showToast('Update failed', 'error'); btn.disabled = false; btn.textContent = '⬇️ Pull Update from GitHub & Restart'; }
+    }
+
+    // ─── Auto-Update ───
+    async function loadAutoUpdate() {
+      try {
+        const res = await fetch('/admin/api/auto-update', { credentials: 'same-origin' });
+        const data = await res.json();
+        document.getElementById('toggleAutoUpdate').checked = data.enabled;
+        document.getElementById('autoUpdateInterval').value = data.interval;
+      } catch(e) {}
+    }
+
+    async function toggleAutoUpdate() {
+      const enabled = document.getElementById('toggleAutoUpdate').checked;
+      const interval = parseInt(document.getElementById('autoUpdateInterval').value) || 30;
+      try {
+        await fetch('/admin/api/auto-update', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled, interval })
+        });
+        showToast(enabled ? `Auto-update enabled (${interval}min)` : 'Auto-update disabled');
+      } catch(e) { showToast('Failed to save', 'error'); }
+    }
+
+    async function saveAutoUpdate() {
+      const enabled = document.getElementById('toggleAutoUpdate').checked;
+      const interval = parseInt(document.getElementById('autoUpdateInterval').value) || 30;
+      try {
+        await fetch('/admin/api/auto-update', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled, interval })
+        });
+      } catch(e) {}
+    }
+
+    // Bot Toggle
+    async function loadBotToggle() {
+      try {
+        const res = await fetch('/admin/api/bot-toggle', { credentials: 'same-origin' });
+        const data = await res.json();
+        document.getElementById('toggleBotEnabled').checked = data.enabled;
+      } catch(e) {}
+    }
+
+    async function toggleBotEnabled() {
+      const enabled = document.getElementById('toggleBotEnabled').checked;
+      try {
+        await fetch('/admin/api/bot-toggle', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        showToast(enabled ? 'Bot is now ONLINE' : 'Bot is now OFFLINE');
+      } catch(e) { showToast('Failed to toggle bot', 'error'); }
+    }
+
+    // Settings
+    async function loadSettings() {
+      try {
+        const res = await fetch('/admin/api/settings', { credentials: 'same-origin' });
+        const data = await res.json();
+        document.getElementById('botName').value = data.botName || '';
+        document.getElementById('botPrompt').value = data.botPrompt || '';
+        document.getElementById('toggleInbox').checked = data.replyToInbox;
+        document.getElementById('toggleGroups').checked = data.replyToGroups;
+        document.getElementById('botNameSidebar').textContent = data.botName || 'AI Assistant';
+      } catch(e) {}
+    }
+
+    async function saveSettings() {
+      try {
+        await fetch('/admin/api/settings', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            botName: document.getElementById('botName').value,
+            botPrompt: document.getElementById('botPrompt').value
+          })
+        });
+        showToast('Settings saved!');
+        loadSettings();
+      } catch(e) { showToast('Failed to save settings', 'error'); }
+    }
+
+    async function saveReplySettings() {
+      try {
+        await fetch('/admin/api/settings', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            replyToInbox: document.getElementById('toggleInbox').checked,
+            replyToGroups: document.getElementById('toggleGroups').checked
+          })
+        });
+        showToast('Reply settings updated!');
+      } catch(e) { showToast('Failed to update', 'error'); }
+    }
+
+    // Blocklist
+    let allContacts = [];
+    let blockedData = { numbers: [], groups: [] };
+
+    async function loadBlocklist() {
+      try {
+        const res = await fetch('/admin/api/blocklist', { credentials: 'same-origin' });
+        blockedData = await res.json();
+        renderBlocklists();
+      } catch(e) {}
+    }
+
+    function renderBlocklists() {
+      const numList = document.getElementById('blockedNumbers');
+      const grpList = document.getElementById('blockedGroups');
+      const numEmpty = document.getElementById('numbersEmpty');
+      const grpEmpty = document.getElementById('groupsEmpty');
+
+      document.getElementById('blockedNumCount').textContent = blockedData.numbers.length;
+      document.getElementById('blockedGrpCount').textContent = blockedData.groups.length;
+
+      if (blockedData.numbers.length === 0) {
+        numList.innerHTML = '';
+        numEmpty.style.display = 'block';
+      } else {
+        numEmpty.style.display = 'none';
+        numList.innerHTML = blockedData.numbers.map(n => {
+          const num = n.replace('@c.us', '');
+          const contact = allContacts.find(c => c.number === num || c.id === n);
+          const name = contact ? contact.name : num;
+          return `<li><span><b>${name}</b><br><small style="color:#8b949e">${num}</small></span>
+          <button class="remove-btn" onclick="removeBlock('number','${encodeURIComponent(n)}')">&times;</button></li>`;
+        }).join('');
+      }
+
+      if (blockedData.groups.length === 0) {
+        grpList.innerHTML = '';
+        grpEmpty.style.display = 'block';
+      } else {
+        grpEmpty.style.display = 'none';
+        grpList.innerHTML = blockedData.groups.map(g => {
+          const contact = allContacts.find(c => c.id === g);
+          const name = contact ? contact.name : g;
+          return `<li><span><b>${name}</b><br><small style="color:#8b949e">${g}</small></span>
+          <button class="remove-btn" onclick="removeBlock('group','${encodeURIComponent(g)}')">&times;</button></li>`;
+        }).join('');
+      }
+    }
+
+    async function loadAllContacts() {
+      try {
+        const res = await fetch('/admin/api/contacts', { credentials: 'same-origin' });
+        allContacts = await res.json();
+        renderSearchResults(allContacts);
+      } catch(e) {
+        allContacts = [];
+      }
+    }
+
+    async function searchContacts() {
+      const query = document.getElementById('searchContactInput').value.trim().toLowerCase();
+      if (!query) {
+        document.getElementById('contactSearchResults').innerHTML = '';
+        document.getElementById('contactSearchEmpty').style.display = 'block';
+        document.getElementById('contactSearchEmpty').textContent = 'Type a name or number to search contacts';
+        return;
+      }
+      if (allContacts.length === 0) await loadAllContacts();
+      const filtered = allContacts.filter(c =>
+        (c.name && c.name.toLowerCase().includes(query)) ||
+        (c.number && c.number.includes(query))
+      );
+      renderSearchResults(filtered);
+    }
+
+    function renderSearchResults(contacts) {
+      const container = document.getElementById('contactSearchResults');
+      const empty = document.getElementById('contactSearchEmpty');
+      if (contacts.length === 0) {
+        container.innerHTML = '';
+        empty.style.display = 'block';
+        empty.textContent = 'No contacts found';
+        return;
+      }
+      empty.style.display = 'none';
+      container.innerHTML = contacts.slice(0, 50).map(c => {
+        const num = c.number || c.id;
+        const isBlocked = blockedData.numbers.includes(num + '@c.us') || blockedData.numbers.includes(num);
+        return `<div class="contact-item ${isBlocked ? 'contact-blocked' : ''}">
+          <div class="contact-info">
+            <div class="contact-name">${c.name || 'Unknown'}</div>
+            <div class="contact-number">${num}</div>
+          </div>
+          <div class="contact-actions">
+            ${isBlocked
+              ? `<button class="btn btn-outline btn-sm" onclick="unblockContact('${num}')">Unblock</button>`
+              : `<button class="btn btn-danger btn-sm" onclick="blockContact('${num}')">Block</button>`
+            }
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function blockContact(num) {
+      await fetch('/admin/api/blocklist', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'number', value: num })
+      });
+      showToast(num + ' blocked');
+      await loadBlocklist();
+      searchContacts();
+    }
+
+    async function unblockContact(num) {
+      const id = num.includes('@c.us') ? num : num + '@c.us';
+      await fetch('/admin/api/blocklist/number/' + encodeURIComponent(id), { method: 'DELETE', credentials: 'same-origin' });
+      showToast(num + ' unblocked');
+      await loadBlocklist();
+      searchContacts();
+    }
+
+    async function blockNumber() {
+      const val = document.getElementById('blockNumberInput').value.trim();
+      if (!val) return;
+      await fetch('/admin/api/blocklist', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'number', value: val })
+      });
+      document.getElementById('blockNumberInput').value = '';
+      showToast('Number blocked');
+      loadBlocklist();
+    }
+
+    async function blockGroup() {
+      const val = document.getElementById('blockGroupInput').value.trim();
+      if (!val) return;
+      await fetch('/admin/api/blocklist', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'group', value: val })
+      });
+      document.getElementById('blockGroupInput').value = '';
+      showToast('Group blocked');
+      loadBlocklist();
+    }
+
+    async function removeBlock(type, encodedId) {
+      await fetch(`/admin/api/blocklist/${type}/${encodedId}`, { method: 'DELETE', credentials: 'same-origin' });
+      loadBlocklist();
+    }
+
+    // Password
+    function checkStrength() {
+      const pwd = document.getElementById('newPwd').value;
+      const el = document.getElementById('pwdStrength');
+      if (pwd.length < 6) { el.textContent = 'Weak'; el.className = 'strength weak'; }
+      else if (pwd.length < 10) { el.textContent = 'Fair'; el.className = 'strength fair'; }
+      else { el.textContent = 'Strong'; el.className = 'strength strong'; }
+    }
+
+    async function changePassword() {
+      const current = document.getElementById('currentPwd').value;
+      const newPwd = document.getElementById('newPwd').value;
+      const confirm = document.getElementById('confirmPwd').value;
+      if (!current || !newPwd || !confirm) return showToast('All fields are required', 'error');
+      if (newPwd !== confirm) return showToast('Passwords do not match', 'error');
+      try {
+        const res = await fetch('/admin/api/change-password', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ currentPassword: current, newPassword: newPwd, confirmPassword: confirm })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Password updated!');
+          document.getElementById('currentPwd').value = '';
+          document.getElementById('newPwd').value = '';
+          document.getElementById('confirmPwd').value = '';
+        } else {
+          showToast(data.error || 'Failed', 'error');
+        }
+      } catch(e) { showToast('Failed to change password', 'error'); }
+    }
+
+    function logout() {
+      fetch('/admin/logout', { method: 'POST', credentials: 'same-origin' })
+        .then(() => window.location.href = '/admin/login');
+    }
+
+    async function factoryReset() {
+      if (!confirm('⚠️ FACTORY RESET\n\nThis will delete EVERYTHING:\n- Admin password\n- All admin users\n- All API keys\n- Blocklist\n- WhatsApp session\n\nBot will restart fresh.\n\nAre you sure?')) return;
+      if (!confirm('Last chance! Everything will be permanently deleted.')) return;
+      const btn = document.getElementById('factoryResetBtn');
+      btn.textContent = '⏳ Resetting...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/admin/api/factory-reset', {
+          method: 'POST',
+          credentials: 'same-origin'
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Factory reset! Redirecting...');
+          setTimeout(() => { window.location.href = '/admin/login'; }, 3000);
+        } else {
+          showToast(data.error || 'Failed', 'error');
+          btn.textContent = 'Factory Reset';
+          btn.disabled = false;
+        }
+      } catch(e) {
+        showToast('Reset failed', 'error');
+        btn.textContent = 'Factory Reset';
+        btn.disabled = false;
+      }
+    }
+
+    // ─── AI API Manager ───
+    let aiApisData = [];
+
+    async function loadAIApis() {
+      try {
+        const res = await fetch('/admin/api/ai-apis', { credentials: 'same-origin' });
+        aiApisData = await res.json();
+        renderAIApis();
+      } catch(e) {}
+    }
+
+    function renderAIApis() {
+      const container = document.getElementById('aiApisList');
+      const empty = document.getElementById('aiApisEmpty');
+      if (aiApisData.length === 0) {
+        container.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      container.innerHTML = aiApisData.map(api => {
+        const statusClass = api.isActive ? '' : ' inactive';
+        const statusBadge = api.isActive
+          ? '<span class="badge badge-active">Active</span>'
+          : '<span class="badge badge-disabled">Inactive</span>';
+        const defaultBadge = api.isDefault
+          ? ' <span class="badge badge-ok">⭐ Default</span>'
+          : '';
+        const testBadge = api.lastTestStatus === 'ok'
+          ? `<span class="badge badge-ok">Last: OK (${api.lastTestResponseTime}s)</span>`
+          : api.lastTestStatus === 'error'
+          ? `<span class="badge badge-error">Last: Failed</span>`
+          : '<span class="badge badge-disabled">Not Tested</span>';
+        const providerLabels = {
+          'openai-compatible': 'OpenAI Compatible',
+          'openai-official': 'OpenAI Official',
+          'gemini': 'Google Gemini',
+          'anthropic': 'Anthropic Claude',
+          '1min-ai': '1min.ai',
+          'custom-rest': 'Custom REST',
+          'custom-json': 'Custom JSON'
+        };
+        return `
+          <div class="api-card${statusClass}">
+            <div class="api-card-header">
+              <div class="api-card-title">${api.name}</div>
+              <div>${statusBadge}${defaultBadge}</div>
+            </div>
+            <div class="api-card-meta">
+              <span>📡 ${providerLabels[api.providerType] || api.providerType}</span>
+              <span>🧠 ${api.model || 'N/A'}</span>
+              <span>📊 Priority: ${api.priority || '—'}</span>
+              <span>${testBadge}</span>
+            </div>
+            <div class="api-card-actions">
+              <button class="btn btn-outline btn-sm" onclick="testAIApi('${api.id}')">🧪 Test</button>
+              <button class="btn btn-outline btn-sm" onclick="editAIApi('${api.id}')">✏️ Edit</button>
+              <button class="btn btn-outline btn-sm" onclick="toggleAIApi('${api.id}')">${api.isActive ? '🔴 Disable' : '🟢 Enable'}</button>
+              ${!api.isDefault ? `<button class="btn btn-outline btn-sm" onclick="setDefaultAIApi('${api.id}')">⭐ Default</button>` : ''}
+              <button class="btn btn-danger btn-sm" onclick="deleteAIApi('${api.id}','${api.name.replace(/'/g,"\\'")}')">🗑 Delete</button>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function showAddAPIModal() {
+      document.getElementById('aiApiEditId').value = '';
+      document.getElementById('aiApiModalTitle').textContent = 'Add AI API';
+      document.getElementById('aiApiSaveBtn').textContent = 'Add API';
+      document.getElementById('aiApiName').value = '';
+      document.getElementById('aiApiProvider').value = 'openai-compatible';
+      document.getElementById('aiApiEndpoint').value = '';
+      document.getElementById('aiApiKeyValue').value = '';
+      document.getElementById('aiApiModel').value = '';
+      document.getElementById('aiApiAuthType').value = 'bearer';
+      document.getElementById('aiApiPriority').value = aiApisData.length + 1;
+      document.getElementById('aiApiMaxTokens').value = '1024';
+      document.getElementById('aiApiTemperature').value = '0.7';
+      document.getElementById('aiApiSystemPrompt').value = '';
+      document.getElementById('aiApiHttpMethod').value = 'POST';
+      document.getElementById('aiApiCustomHeaders').value = '';
+      document.getElementById('aiApiRequestTemplate').value = '';
+      document.getElementById('aiApiResponsePath').value = '';
+      document.getElementById('aiApiModal').classList.add('show');
+    }
+
+    function onProviderTypeChange() {
+      const type = document.getElementById('aiApiProvider').value;
+      const endpoint = document.getElementById('aiApiEndpoint');
+      const model = document.getElementById('aiApiModel');
+      const authType = document.getElementById('aiApiAuthType');
+      if (type === '1min-ai' && !endpoint.value) {
+        endpoint.value = 'https://api.1min.ai/api/chat-with-ai';
+        if (!model.value) model.value = 'gpt-4o-mini';
+        authType.value = 'api-key-upper';
+      }
+    }
+
+    function hideAIApiModal() {
+      document.getElementById('aiApiModal').classList.remove('show');
+    }
+
+    async function editAIApi(id) {
+      try {
+        const res = await fetch('/admin/api/ai-apis/' + id, { credentials: 'same-origin' });
+        const api = await res.json();
+        document.getElementById('aiApiEditId').value = api.id;
+        document.getElementById('aiApiModalTitle').textContent = 'Edit AI API';
+        document.getElementById('aiApiSaveBtn').textContent = 'Save Changes';
+        document.getElementById('aiApiName').value = api.name || '';
+        document.getElementById('aiApiProvider').value = api.providerType || 'openai-compatible';
+        document.getElementById('aiApiEndpoint').value = api.endpoint || '';
+        document.getElementById('aiApiKeyValue').value = api.apiKey || '';
+        document.getElementById('aiApiModel').value = api.model || '';
+        document.getElementById('aiApiAuthType').value = api.authType || 'bearer';
+        document.getElementById('aiApiPriority').value = api.priority || 1;
+        document.getElementById('aiApiMaxTokens').value = api.maxTokens || 1024;
+        document.getElementById('aiApiTemperature').value = api.temperature || 0.7;
+        document.getElementById('aiApiSystemPrompt').value = api.systemPrompt || '';
+        document.getElementById('aiApiHttpMethod').value = api.httpMethod || 'POST';
+        document.getElementById('aiApiCustomHeaders').value = api.customHeaders ? JSON.stringify(api.customHeaders, null, 2) : '';
+        document.getElementById('aiApiRequestTemplate').value = api.requestTemplate || '';
+        document.getElementById('aiApiResponsePath').value = api.responsePath || '';
+        document.getElementById('aiApiModal').classList.add('show');
+      } catch(e) { showToast('Failed to load API details', 'error'); }
+    }
+
+    async function saveAIApi() {
+      const editId = document.getElementById('aiApiEditId').value;
+      const name = document.getElementById('aiApiName').value.trim();
+      const providerType = document.getElementById('aiApiProvider').value;
+      const endpoint = document.getElementById('aiApiEndpoint').value.trim();
+      const apiKey = document.getElementById('aiApiKeyValue').value.trim();
+      const model = document.getElementById('aiApiModel').value.trim();
+      const authType = document.getElementById('aiApiAuthType').value;
+      const priority = parseInt(document.getElementById('aiApiPriority').value) || 1;
+      const maxTokens = parseInt(document.getElementById('aiApiMaxTokens').value) || 1024;
+      const temperature = parseFloat(document.getElementById('aiApiTemperature').value) || 0.7;
+      const systemPrompt = document.getElementById('aiApiSystemPrompt').value.trim();
+      const httpMethod = document.getElementById('aiApiHttpMethod').value;
+      let customHeaders = {};
+      let requestTemplate = '';
+      const responsePath = document.getElementById('aiApiResponsePath').value.trim();
+
+      try {
+        const h = document.getElementById('aiApiCustomHeaders').value.trim();
+        if (h) customHeaders = JSON.parse(h);
+      } catch(e) { return showToast('Invalid JSON in Custom Headers', 'error'); }
+
+      try {
+        const t = document.getElementById('aiApiRequestTemplate').value.trim();
+        if (t) { JSON.parse(t); requestTemplate = t; }
+      } catch(e) { return showToast('Invalid JSON in Request Template', 'error'); }
+
+      if (!name) return showToast('API name is required', 'error');
+      if (!apiKey) return showToast('API key is required', 'error');
+
+      const body = {
+        name, providerType, endpoint, apiKey, model, authType,
+        priority, maxTokens, temperature, systemPrompt, httpMethod,
+        customHeaders, requestTemplate, responsePath, isActive: true
+      };
+
+      try {
+        const url = editId ? '/admin/api/ai-apis/' + editId : '/admin/api/ai-apis';
+        const method = editId ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+          method, credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(editId ? 'API updated!' : 'API added!');
+          hideAIApiModal();
+          loadAIApis();
+        } else {
+          showToast(data.error || 'Failed', 'error');
+        }
+      } catch(e) { showToast('Failed to save API', 'error'); }
+    }
+
+    async function deleteAIApi(id, name) {
+      if (!confirm('Delete "' + name + '"?')) return;
+      try {
+        await fetch('/admin/api/ai-apis/' + id, { method: 'DELETE', credentials: 'same-origin' });
+        showToast('API deleted');
+        loadAIApis();
+      } catch(e) { showToast('Failed to delete', 'error'); }
+    }
+
+    async function toggleAIApi(id) {
+      try {
+        await fetch('/admin/api/ai-apis/' + id + '/toggle', {
+          method: 'PATCH', credentials: 'same-origin'
+        });
+        loadAIApis();
+      } catch(e) { showToast('Failed to toggle', 'error'); }
+    }
+
+    async function setDefaultAIApi(id) {
+      try {
+        await fetch('/admin/api/ai-apis/' + id + '/set-default', {
+          method: 'PATCH', credentials: 'same-origin'
+        });
+        showToast('Default API updated');
+        loadAIApis();
+      } catch(e) { showToast('Failed to set default', 'error'); }
+    }
+
+    async function testAIApi(id) {
+      const modal = document.getElementById('testResultModal');
+      const content = document.getElementById('testResultContent');
+      content.innerHTML = '<div style="text-align:center;padding:20px;">⏳ Testing API... please wait</div>';
+      modal.classList.add('show');
+
+      try {
+        const res = await fetch('/admin/api/ai-apis/' + id + '/test', {
+          method: 'POST', credentials: 'same-origin'
+        });
+        const data = await res.json();
+
+        const providerLabels = {
+          'openai-compatible': 'OpenAI Compatible', 'openai-official': 'OpenAI Official',
+          'gemini': 'Google Gemini', 'anthropic': 'Anthropic Claude',
+          '1min-ai': '1min.ai',
+          'custom-rest': 'Custom REST', 'custom-json': 'Custom JSON'
+        };
+
+        if (data.success) {
+          content.innerHTML = `
+            <div style="background:rgba(37,211,102,0.08);border:1px solid rgba(37,211,102,0.15);border-radius:8px;padding:16px;margin-bottom:12px;">
+              <div style="font-size:18px;font-weight:600;color:#25D366;margin-bottom:8px;">✅ API Working</div>
+              <div style="font-size:13px;color:#8b949e;line-height:2;">
+                <b>Provider:</b> ${providerLabels[data.provider] || data.provider}<br>
+                <b>Model:</b> ${data.model}<br>
+                <b>Response Time:</b> ${data.responseTime}s<br>
+                <b>Status:</b> <span style="color:#25D366;">200 OK</span>
+              </div>
+            </div>
+            <div style="background:#0d1117;border-radius:8px;padding:12px;font-size:13px;color:#e6edf3;max-height:150px;overflow-y:auto;">
+              <b>Response Preview:</b><br>
+              <div style="margin-top:8px;color:#8b949e;">${data.preview || 'N/A'}</div>
+            </div>`;
+        } else {
+          content.innerHTML = `
+            <div style="background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.15);border-radius:8px;padding:16px;">
+              <div style="font-size:18px;font-weight:600;color:#f85149;margin-bottom:8px;">❌ API Failed</div>
+              <div style="font-size:13px;color:#8b949e;line-height:2;">
+                <b>Provider:</b> ${providerLabels[data.provider] || data.provider}<br>
+                <b>Model:</b> ${data.model}<br>
+                <b>Response Time:</b> ${data.responseTime}s<br>
+                <b>Error:</b> <span style="color:#f85149;">${data.error}</span>
+              </div>
+            </div>`;
+        }
+        loadAIApis();
+      } catch(e) {
+        content.innerHTML = `<div style="background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.15);border-radius:8px;padding:16px;">
+          <div style="font-size:16px;font-weight:600;color:#f85149;">❌ Test Failed</div>
+          <div style="font-size:13px;color:#8b949e;margin-top:8px;">${e.message}</div>
+        </div>`;
+      }
+    }
+
+    // ─── Fallback Messages ───
+    let fallbackMessages = [];
+
+    async function loadFallbackMessages() {
+      try {
+        const res = await fetch('/admin/api/fallback-messages', { credentials: 'same-origin' });
+        fallbackMessages = await res.json();
+        renderFallbackMessages();
+      } catch(e) {}
+    }
+
+    function renderFallbackMessages() {
+      const container = document.getElementById('fallbackList');
+      const empty = document.getElementById('fallbackEmpty');
+      document.getElementById('fallbackCount').textContent = fallbackMessages.length;
+      if (fallbackMessages.length === 0) {
+        container.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      container.innerHTML = fallbackMessages.map((msg, i) => `
+        <div class="contact-item" style="align-items:flex-start;">
+          <div class="contact-info" style="flex:1;">
+            <div style="font-size:13px;color:#e6edf3;line-height:1.5;padding:4px 0;">${msg}</div>
+          </div>
+          <div class="contact-actions">
+            <button class="btn btn-danger btn-sm" onclick="deleteFallbackMessage(${i})">🗑</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function addFallbackMessage() {
+      const msg = document.getElementById('newFallbackMsg').value.trim();
+      if (!msg) return showToast('Type a message first', 'error');
+      try {
+        const res = await fetch('/admin/api/fallback-messages', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg })
+        });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('newFallbackMsg').value = '';
+          showToast('Message added!');
+          loadFallbackMessages();
+        }
+      } catch(e) { showToast('Failed to add message', 'error'); }
+    }
+
+    async function deleteFallbackMessage(index) {
+      try {
+        await fetch('/admin/api/fallback-messages/' + index, {
+          method: 'DELETE', credentials: 'same-origin'
+        });
+        showToast('Message removed');
+        loadFallbackMessages();
+      } catch(e) { showToast('Failed to delete', 'error'); }
+    }
+
+    // Init
+    fetchStatus();
+    checkWhatsAppStatus();
+    loadSettings();
+    loadBotToggle();
+    loadAutoUpdate();
+    connectLogs();
+    setInterval(fetchStatus, 10000);
+    setInterval(checkWhatsAppStatus, 10000);
+  </script>
+</body>
+</html>

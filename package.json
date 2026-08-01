@@ -1,0 +1,26 @@
+{
+  "name": "whatsapp-ai-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp AI Auto-Reply Bot with Admin Panel",
+  "author": "Tarif Ahmed (infinityX)",
+  "homepage": "https://t.me/infinityxbd",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "stop": "pkill -f 'node index.js' 2>/dev/null; pkill -f 'chromium' 2>/dev/null; pkill -f 'chrome' 2>/dev/null; echo 'Bot stopped'",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "puppeteer": "^21.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "@google/generative-ai": "^0.21.0",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "bcryptjs": "^2.4.3",
+    "uuid": "^9.0.0",
+    "dotenv": "^16.3.1",
+    "readline": "^1.3.0"
+  }
+}
