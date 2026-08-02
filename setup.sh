@@ -19,6 +19,30 @@ ok()   { echo -e "${GREEN}✅ $1${NC}"; }
 warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "${RED}❌ $1${NC}"; }
 
+# ── Privilege detection ──
+# Works in every scenario:
+#   * root (EUID 0)               → run commands directly
+#   * non-root + sudo available   → prefix commands with sudo
+#   * non-root + no sudo          → run directly (will fail on pkg mgr if
+#                                   it needs root, then we warn)
+if [ "$(id -u)" = "0" ]; then
+    AS_ROOT=""
+    RUN_AS="root"
+elif command -v sudo >/dev/null 2>&1; then
+    AS_ROOT="sudo"
+    RUN_AS="non-root (via sudo)"
+else
+    AS_ROOT=""
+    RUN_AS="non-root (no sudo)"
+fi
+ok "Running as: $RUN_AS"
+
+# Helper: run a command with root privileges when needed.
+# Usage: asRoot <command> [args...]
+asRoot() {
+    $AS_ROOT "$@"
+}
+
 # ── Detect package manager ──
 if command -v apt-get &>/dev/null; then
     PM="apt-get"
@@ -42,7 +66,7 @@ echo "📦 Installing system dependencies for Chrome/Puppeteer..."
 
 install_deb() {
     local pkgs=(
-        libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0
+        libatk1.0-0 libatkbridge2.0-0 libcups2 libdrm2 libxkbcommon0
         libxcomposite1 libxdamage1 libxrandr2 libgbm1 libnss3
         libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0
         fonts-liberation xdg-utils wget curl
@@ -55,8 +79,8 @@ install_deb() {
         fi
     done
     if [ ${#missing[@]} -gt 0 ]; then
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq "${missing[@]}"
+        asRoot apt-get update -qq
+        asRoot apt-get install -y -qq "${missing[@]}"
         ok "Installed ${#missing[@]} system packages"
     else
         ok "All system packages already installed"
@@ -77,7 +101,7 @@ install_rpm() {
         fi
     done
     if [ ${#missing[@]} -gt 0 ]; then
-        sudo $PM install -y "${missing[@]}"
+        asRoot $PM install -y "${missing[@]}"
         ok "Installed ${#missing[@]} system packages"
     else
         ok "All system packages already installed"
@@ -91,7 +115,7 @@ install_apk() {
         alsa-lib pango cairo at-spi2-core
         liberation-fonts wget curl
     )
-    sudo apk add --no-cache "${pkgs[@]}" 2>/dev/null || true
+    asRoot apk add --no-cache "${pkgs[@]}" 2>/dev/null || true
     ok "System packages checked"
 }
 
@@ -102,7 +126,7 @@ install_pacman() {
         alsa-lib pango cairo at-spi2-atk
         ttf-liberation wget curl
     )
-    sudo pacman -Sy --noconfirm --needed "${pkgs[@]}" 2>/dev/null || true
+    asRoot pacman -Sy --noconfirm --needed "${pkgs[@]}" 2>/dev/null || true
     ok "System packages checked"
 }
 
@@ -120,25 +144,37 @@ if command -v node &>/dev/null; then
     ok "Node.js already installed: $NODE_VER"
 else
     warn "Node.js not found, installing..."
+    if [ -n "$AS_ROOT" ]; then
+        ns_runner="sudo -E bash -"
+    else
+        ns_runner="bash -"
+    fi
     if command -v apt-get &>/dev/null; then
-        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-        sudo apt-get install -y -qq nodejs
+        # nodesource setup must run as root (preserving env via -E)
+        curl -fsSL https://deb.nodesource.com/setup_20.x | $ns_runner 2>/dev/null || true
+        asRoot apt-get install -y -qq nodejs
     elif command -v yum &>/dev/null || command -v dnf &>/dev/null; then
-        curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
-        sudo $PM install -y nodejs
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | $ns_runner 2>/dev/null || true
+        asRoot $PM install -y nodejs
     elif command -v apk &>/dev/null; then
-        sudo apk add --no-cache nodejs npm
+        asRoot apk add --no-cache nodejs npm
     elif command -v pacman &>/dev/null; then
-        sudo pacman -Sy --noconfirm nodejs npm
+        asRoot pacman -Sy --noconfirm nodejs npm
     fi
     ok "Node.js installed: $(node -v)"
+fi
+
+# ── Verify npm is available ──
+if ! command -v npm &>/dev/null; then
+    fail "npm is not available after Node.js installation. Cannot continue."
+    exit 1
 fi
 
 # ── Install npm dependencies ──
 echo ""
 echo "📦 Installing npm dependencies..."
 if [ -d "node_modules" ] && [ -f "node_modules/.package-lock.json" ]; then
-    LOCAL_COUNT=$(ls node_modules/ | wc -l)
+    LOCAL_COUNT=$(ls node_modules/ 2>/dev/null | wc -l)
     REQ_COUNT=$(node -e "const p=require('./package.json'); console.log(Object.keys(p.dependencies).length)")
     if [ "$LOCAL_COUNT" -ge "$REQ_COUNT" ]; then
         ok "node_modules already installed ($LOCAL_COUNT packages, need $REQ_COUNT)"
