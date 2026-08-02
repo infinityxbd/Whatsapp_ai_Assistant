@@ -6,6 +6,7 @@
 const aiService = require('../ai/service');
 const { readJSON } = require('../storage/store');
 const { handleCommand } = require('./commands');
+const { saveUnsent } = require('./unsent');
 
 const MAX_HISTORY = 7;
 const chatHistories = {};
@@ -55,9 +56,55 @@ function cleanId(id) {
   return String(id).replace(/@c\.us/, '').replace(/@lid/, '').replace(/@g\.us/, '');
 }
 
-function isBlocked(number, blocklist) {
-  const clean = cleanId(number);
-  return blocklist.numbers.some(n => cleanId(n) === clean);
+// Digest-only blocked-number match, tolerating country-code / leading-zero
+// differences (e.g. blocked as `017XXXXXXXX` but WID is `88017XXXXXXXX`).
+// Suffix match is limited to at most 3 extra leading digits.
+function isBlockedNumberDigits(digits) {
+  if (!digits || digits.length < 7) return false;
+  const blocklist = readJSON('blocklist.json') || { numbers: [], groups: [] };
+  for (const n of blocklist.numbers) {
+    const bDigits = String(n || '').replace(/\D/g, '');
+    if (!bDigits || bDigits.length < 7) continue;
+    if (digits === bDigits) return true;
+    // Tolerate up to 3 extra leading digits (country code / leading zero)
+    const longer = digits.length >= bDigits.length ? digits : bDigits;
+    const shorter = digits.length >= bDigits.length ? bDigits : digits;
+    if (longer.length - shorter.length <= 3 && longer.endsWith(shorter)) return true;
+  }
+  return false;
+}
+
+// Robust block check: exact clean-id match, plus digit match, plus resolution
+// of the contact's real phone number (WhatsApp Web may use LIDs that don't
+// match the blocked phone number).
+async function isBlocked(message, client) {
+  const number = message.from;
+  if (!number) return false;
+
+  if (isBlockedNumberDigits(String(number).replace(/\D/g, ''))) return true;
+
+  // Resolve the contact's real number (handles LID → phone)
+  let phoneDigits = null;
+  try {
+    const { resolveLid } = require('./whatsapp');
+    const resolved = await resolveLid(number);
+    phoneDigits = resolved ? String(resolved).replace(/\D/g, '') : null;
+  } catch (e) {}
+
+  if (phoneDigits && isBlockedNumberDigits(phoneDigits)) return true;
+
+  // Fallback via message.getContact()
+  if (!phoneDigits) {
+    try {
+      const contact = await message.getContact();
+      if (contact && contact.number) {
+        phoneDigits = String(contact.number).replace(/\D/g, '');
+        if (phoneDigits && isBlockedNumberDigits(phoneDigits)) return true;
+      }
+    } catch (e) {}
+  }
+
+  return false;
 }
 
 function isEmojiOnly(text) {
@@ -187,11 +234,31 @@ async function handleMessage(message, client) {
       const config = readJSON('config.json') || {};
       const blocklist = readJSON('blocklist.json') || { numbers: [], groups: [] };
 
+      // Save any message that will NOT get an AI reply into the unsent buffer,
+      // so the owner can review them via /unsent (e.g. blocked senders).
+      const recordUnsent = async () => {
+        try {
+          saveUnsent({
+            from: message.from,
+            name: '',
+            time: new Date().toISOString(),
+            body: message.body || '',
+            type: isGroup ? 'group' : 'inbox'
+          });
+        } catch (e) {}
+      };
+
       if (isGroup && !config.replyToGroups) return;
       if (!isGroup && !config.replyToInbox) return;
 
-      if (blocklist.numbers.length > 0 && isBlocked(message.from, blocklist)) return;
-      if (isGroup && blocklist.groups.some(g => cleanId(g) === cleanId(message.from))) return;
+      if (blocklist.numbers.length > 0 && await isBlocked(message, client)) {
+        await recordUnsent();
+        return;
+      }
+      if (isGroup && blocklist.groups.some(g => cleanId(g) === cleanId(message.from))) {
+        await recordUnsent();
+        return;
+      }
       if (config.botEnabled === false) return;
 
       const chatId = message.from;

@@ -239,6 +239,42 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       return true;
     }
 
+    // ─── Unsent Messages ───
+    // Show the last 30 messages that were NOT replied to (blocked senders,
+    // group block, etc.). Works like the reference bot's /unsent.
+    case '/unsent': {
+      let list = [];
+      try { list = require('./unsent').listUnsent() || []; } catch (e) {}
+      if (!Array.isArray(list) || list.length === 0) {
+        await reply(message, '📭 No unsent messages.', client);
+        return true;
+      }
+      const sorted = list.slice().reverse();
+      const group = [];
+      const inbox = [];
+      for (const u of sorted) {
+        const type = u.type || (u.from && u.from.includes('@g.us') ? 'group' : 'inbox');
+        if (type === 'group') group.push(u);
+        else inbox.push(u);
+      }
+      const fmt = (arr) => arr.map((u, i) => {
+        const time = u.time ? new Date(u.time).toLocaleString() : '';
+        const who = u.name ? `${u.name} (${cleanId(u.from)})` : cleanId(u.from);
+        return `${i + 1}. ${who}\n   📅 ${time}\n   💬 ${String(u.body || '').slice(0, 80)}`;
+      });
+      if (group.length) {
+        await reply(message, `👥 *Group unsent: ${group.length}*\n\n${fmt(group).join('\n')}`, client);
+      } else {
+        await reply(message, '👥 Group unsent: 0 (none).', client);
+      }
+      if (inbox.length) {
+        await reply(message, `📥 *Inbox unsent: ${inbox.length}*\n\n${fmt(inbox).join('\n')}`, client);
+      } else {
+        await reply(message, '📥 Inbox unsent: 0 (none).', client);
+      }
+      return true;
+    }
+
     // ─── Status ───
     case '/status': {
       const config = readJSON('config.json') || {};
@@ -320,6 +356,9 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
 /block <number> — Block
 /unblock <number> — Unblock
 /blocklist — Blocked list
+
+*Unsent:*
+/unsent — Last 30 unsent messages (blocked/ignored)
 
 *Other:*
 /gplist — Group list

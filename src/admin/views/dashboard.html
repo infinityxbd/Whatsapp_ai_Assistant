@@ -606,7 +606,8 @@
           <code style="color:#25D366">/blocklist</code> — Shob blocked numbers/groups dekhabe<br>
           <code style="color:#25D366">/unblock 8801XXXXXXXXX</code> — Number unblock kore<br>
           <code style="color:#25D366">/unblock 120363XXX@g.us</code> — Group unblock kore<br>
-          <code style="color:#25D366">/gplist</code> — Shob groups name + ID soho dekhabe
+          <code style="color:#25D366">/gplist</code> — Shob groups name + ID soho dekhabe<br>
+          <code style="color:#25D366">/unsent</code> — Last 30 unsent messages dekhabe (blocked/ignore kora senders)
         </div>
       </div>
     </div>
@@ -635,6 +636,9 @@
               Your pairing code:
             </div>
             <div id="pairingCode" style="font-size:32px;font-weight:700;letter-spacing:4px;color:#25D366;margin:16px 0;"></div>
+            <div style="margin:0 0 16px;">
+              <button class="btn btn-primary" onclick="copyPairingCode()">📋 Copy Code</button>
+            </div>
             <div style="font-size:13px;color:#8b949e;line-height:1.6;">
               1. Open WhatsApp on your phone<br>
               2. Go to <b>Settings → Linked Devices</b><br>
@@ -969,6 +973,24 @@
       }
       btn.textContent = '🔑 Get Pairing Code';
       btn.disabled = false;
+    }
+
+    async function copyPairingCode() {
+      const code = document.getElementById('pairingCode').textContent.trim();
+      if (!code) return showToast('No pairing code yet', 'error');
+      try {
+        await navigator.clipboard.writeText(code);
+      } catch(e) {
+        const ta = document.createElement('textarea');
+        ta.value = code;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      showToast('📋 Pairing code copied!');
     }
 
     let pairingPollInterval = null;
