@@ -305,7 +305,7 @@ client.on('ready', async () => {
     }
   } catch (e) {}
 
-  // Periodic cache auto-clean every 30 min
+  // Periodic cache auto-clean every 15 min (keeps the browser from sleeping)
   if (global._cacheCleanInterval) clearInterval(global._cacheCleanInterval);
   global._cacheCleanInterval = setInterval(() => {
     try {
@@ -329,7 +329,7 @@ client.on('ready', async () => {
       }
       console.log('🧹 Auto cache clean done');
     } catch (e) {}
-  }, 30 * 60 * 1000);
+  }, 15 * 60 * 1000);
 
   if (onlineInterval) clearInterval(onlineInterval);
   onlineInterval = setInterval(async () => {

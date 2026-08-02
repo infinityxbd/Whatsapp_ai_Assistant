@@ -107,6 +107,25 @@ async function isBlocked(message, client) {
   return false;
 }
 
+// Persist a message that will NOT get an AI reply (blocked sender, blocked
+// group, or muted/archived chat) into the rolling unsent buffer so the owner
+// can review it via /unsent. Both inbox (private) and group messages are kept.
+async function saveUnsentMessage(message, isGroup) {
+  let name = '';
+  try { name = (await message.getChat()).name || ''; } catch (e) {}
+  try {
+    saveUnsent({
+      from: message.from,
+      name,
+      time: new Date().toISOString(),
+      body: message.body || '',
+      type: isGroup ? 'group' : 'inbox'
+    });
+  } catch (e) {
+    console.error('❌ saveUnsent failed:', e.message);
+  }
+}
+
 function isEmojiOnly(text) {
   const stripped = text.trim();
   // Remove all known emoji ranges and check if anything remains
@@ -221,7 +240,11 @@ async function handleMessage(message, client) {
 
     // ─── Incoming messages: muted/archived check ───
     const chatCheck = await checkMutedArchived(message.from, client);
-    if (chatCheck) return;
+    if (chatCheck) {
+      console.log(`🔇 Skipping ${chatCheck} chat: ${message.from}`);
+      await saveUnsentMessage(message, isGroup);
+      return;
+    }
 
     const commandSenderId = isGroup ? (message.author || message.from) : message.from;
 
@@ -234,29 +257,15 @@ async function handleMessage(message, client) {
       const config = readJSON('config.json') || {};
       const blocklist = readJSON('blocklist.json') || { numbers: [], groups: [] };
 
-      // Save any message that will NOT get an AI reply into the unsent buffer,
-      // so the owner can review them via /unsent (e.g. blocked senders).
-      const recordUnsent = async () => {
-        try {
-          saveUnsent({
-            from: message.from,
-            name: '',
-            time: new Date().toISOString(),
-            body: message.body || '',
-            type: isGroup ? 'group' : 'inbox'
-          });
-        } catch (e) {}
-      };
-
       if (isGroup && !config.replyToGroups) return;
       if (!isGroup && !config.replyToInbox) return;
 
       if (blocklist.numbers.length > 0 && await isBlocked(message, client)) {
-        await recordUnsent();
+        await saveUnsentMessage(message, isGroup);
         return;
       }
       if (isGroup && blocklist.groups.some(g => cleanId(g) === cleanId(message.from))) {
-        await recordUnsent();
+        await saveUnsentMessage(message, isGroup);
         return;
       }
       if (config.botEnabled === false) return;

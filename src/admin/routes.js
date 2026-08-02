@@ -12,8 +12,10 @@ const { readJSON, writeJSON } = require('../storage/store');
 const { requireAuth } = require('./middleware');
 
 // ─── Live Log System ───
+// Keep only the last 200 log lines in memory AND on disk so the bot never
+// hangs or sleeps from an ever-growing bot.log file.
 const logBuffer = [];
-const MAX_LOGS = 100;
+const MAX_LOGS = 200;
 const sseClients = new Set();
 const originalLog = console.log;
 const originalError = console.error;
@@ -32,6 +34,15 @@ function broadcastLog(level, args) {
   sseClients.forEach(res => { try { res.write(data); } catch (e) {} });
   // Write to log file for /log command
   try { fs.writeFileSync(logFilePath, `${time} [${level}] ${msg}\n`, LOG_WRITE_FLAGS); } catch (e) {}
+  // Auto-trim bot.log so only the last MAX_LOGS lines remain (drops oldest).
+  try {
+    if (fs.existsSync(logFilePath)) {
+      const lines = fs.readFileSync(logFilePath, 'utf-8').split('\n').filter(l => l.length > 0);
+      if (lines.length > MAX_LOGS) {
+        fs.writeFileSync(logFilePath, lines.slice(-MAX_LOGS).join('\n') + '\n', 'utf-8');
+      }
+    }
+  } catch (e) {}
 }
 
 console.log = (...args) => { originalLog.apply(console, args); broadcastLog('info', args); };
