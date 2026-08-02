@@ -6,6 +6,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const { handleMessage } = require('./handler');
 const { execSync } = require('child_process');
+const path = require('path');
 
 process.on('uncaughtException', (err) => {
   console.error('❌ Uncaught exception:', err.message);
@@ -15,21 +16,68 @@ process.on('unhandledRejection', (err) => {
   console.error('❌ Unhandled rejection:', err?.message || err);
 });
 
+// A working Chrome build needs its ICU data and resource pack next to the
+// binary. A corrupt Puppeteer download or a half-installed distro Chromium is
+// missing these and will fail at launch ("Invalid file descriptor to ICU
+// data" / "Failed to launch the browser process"). Check before trusting it.
+function chromeDataOk(bin) {
+  const fs = require('fs');
+  let real = bin;
+  try { real = fs.realpathSync(bin); } catch (e) {}
+  const dirs = [path.dirname(real)];
+  const base = path.basename(real);
+  if (base === 'chromium' || base === 'chromium-browser') {
+    dirs.push('/usr/lib/chromium', '/usr/lib/chromium-browser');
+  }
+  for (const d of dirs) {
+    try {
+      if (fs.existsSync(path.join(d, 'icudtl.dat')) && fs.existsSync(path.join(d, 'resources.pak'))) {
+        return true;
+      }
+    } catch (e) {}
+  }
+  return false;
+}
+
 function findChrome() {
+  const fs = require('fs');
+  const os = require('os');
   const paths = [
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/snap/bin/chromium',
-    '/home/codespace/.cache/puppeteer/chrome/linux-146.0.7680.31/chrome-linux64/chrome',
-    '/home/codespace/.cache/puppeteer/chrome/linux-121.0.6167.85/chrome-linux64/chrome',
   ];
   for (const p of paths) {
     try {
-      if (require('fs').existsSync(p)) return p;
+      if (fs.existsSync(p) && chromeDataOk(p)) return p;
     } catch (e) {}
   }
+  // Look inside the Puppeteer browser cache (works on any user/system)
+  try {
+    const cacheRoots = [
+      path.join(os.homedir(), '.cache', 'puppeteer'),
+      '/root/.cache/puppeteer',
+      process.env.PUPPETEER_CACHE_DIR,
+    ].filter(Boolean);
+    for (const root of cacheRoots) {
+      const chromeDir = path.join(root, 'chrome');
+      if (!fs.existsSync(chromeDir)) continue;
+      const versions = fs.readdirSync(chromeDir).sort().reverse();
+      for (const ver of versions) {
+        const candidates = [
+          path.join(chromeDir, ver, 'chrome-linux64', 'chrome'),
+          path.join(chromeDir, ver, 'chrome-linux', 'chrome'),
+          path.join(chromeDir, ver, 'chrome-win64', 'chrome.exe'),
+          path.join(chromeDir, ver, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+        ];
+        for (const c of candidates) {
+          try { if (fs.existsSync(c) && chromeDataOk(c)) return c; } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {}
   try {
     const found = execSync('which chromium chromium-browser google-chrome google-chrome-stable 2>/dev/null', { encoding: 'utf-8' }).trim();
     if (found) return found.split('\n')[0];
@@ -55,6 +103,14 @@ const args = [
   '--disable-blink-features=AutomationControlled',
   '--disable-features=IsolateOrigins,site-per-process',
   '--window-size=1280,720',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-component-extensions-with-background-pages',
+  '--disable-default-apps',
+  '--disable-sync',
+  '--metrics-recording-only',
+  '--mute-audio',
+  '--no-default-browser-check',
 ];
 
 const puppeteerConfig = {
