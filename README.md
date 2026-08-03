@@ -106,8 +106,8 @@ chmod +x setup.sh
 
 ```bash
 # Clone the repo
-git clone https://github.com/infinityxbd/whatsapp_aiAssistamt.git
-cd whatsapp_aiAssistamt
+git clone https://github.com/infinityxbd/Whatsapp_ai_Assistant.git
+cd whatsapp_ai_Assistant
 
 # Install dependencies
 npm install
