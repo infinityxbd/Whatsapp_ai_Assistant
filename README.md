@@ -107,7 +107,7 @@ chmod +x setup.sh
 ```bash
 # Clone the repo
 git clone https://github.com/infinityxbd/Whatsapp_ai_Assistant.git
-cd whatsapp_ai_Assistant
+cd Whatsapp_ai_Assistant
 
 # setup and install dependencies
 bash set.sh
