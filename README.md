@@ -110,9 +110,12 @@ git clone https://github.com/infinityxbd/Whatsapp_ai_Assistant.git
 cd whatsapp_ai_Assistant
 
 # setup and install dependencies
- bash set.sh
+bash set.sh
+```
+
 ---
----
+
+
 
 ## 📱 Admin Panel
 
