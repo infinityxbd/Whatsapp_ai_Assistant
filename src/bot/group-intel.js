@@ -13,8 +13,6 @@
  *   • Human-like typing delay proportional to message length
  */
 
-const { readJSON } = require('../storage/store');
-
 // ─── Emoji pools for reactions ───
 const REACT_POSITIVE = ['👍', '❤️', '👏', '🔥'];
 const REACT_NEGATIVE = ['😢', '🥺', '💔'];
@@ -45,6 +43,16 @@ function pickReactionEmoji(text) {
   if (/(sorry|problem|issue|kharap|khub kharap|sad|depressed|kosten|tension|mrittu|danger)/i.test(t)) return pick(REACT_NEGATIVE);
   if (/[!！]/.test(t)) return pick(REACT_SHOCK);
   return pick(REACT_DEFAULT);
+}
+
+// True for emoji-only messages (emoji + variation selectors / skin tones / ZWJ
+// sequences). Used for reaction handling instead of a full reply.
+function isEmojiOnly(text) {
+  const stripped = String(text || '').trim();
+  // Remove all known emoji ranges and check if anything remains
+  const emojiRegex = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{20E3}\u{231A}-\u{231B}\u{23E9}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25AB}\u{25B6}\u{25C0}\u{25FB}-\u{25FE}\u{2614}-\u{2615}\u{2648}-\u{2653}\u{267F}\u{2693}\u{26A1}\u{26AA}-\u{26AB}\u{26BD}-\u{26BE}\u{26C4}-\u{26C5}\u{26CE}\u{26D4}\u{26EA}\u{26F2}-\u{26F3}\u{26F5}\u{26FA}\u{26FD}\u{2702}\u{2705}\u{2708}-\u{270D}\u{270F}\u{2712}\u{2714}\u{2716}\u{271D}\u{2721}\u{2728}\u{2733}-\u{2734}\u{2744}\u{2747}\u{274C}\u{274E}\u{2753}-\u{2755}\u{2757}\u{2763}-\u{2764}\u{2795}-\u{2797}\u{27A1}\u{27B0}]/gu;
+  const withoutEmoji = stripped.replace(emojiRegex, '').replace(/\s/g, '');
+  return withoutEmoji.length === 0;
 }
 
 // True for emoji-only, very short or filler messages ("ok", "ha", "ok bhai",
@@ -195,49 +203,231 @@ function isSelfReferenceIdentity(body, config) {
   return nameRe.test(text) && SELF_REF_RE.test(text);
 }
 
-// True when this message is clearly directed at the bot: it is @mentioned,
-// the bot's name is used, or the message is a reply to one of the bot's own
-// messages. These ALWAYS get a reply (bypass cooldown + chance + group mode).
-async function isBotAddressed(message, client, botState, config) {
+// ─── Target detection helpers ───
+
+// All names the bot answers to: config.botName + config.botAliases
+// (aliases can be an array or a comma-separated string).
+function getBotNames(config) {
+  const names = [];
+  const main = String((config && config.botName) || '').trim();
+  if (main.length > 1) names.push(main);
+  const aliases = config && config.botAliases;
+  const list = Array.isArray(aliases) ? aliases : String(aliases || '').split(',');
+  for (const a of list) {
+    const s = String(a || '').trim();
+    if (s.length > 1) names.push(s);
+  }
+  return names;
+}
+
+// True when the text mentions any of the bot's names/aliases.
+function hasBotName(text, config) {
+  const t = String(text || '');
+  return getBotNames(config).some(n => buildBotNameRe(n).test(t));
+}
+
+// Group-wide addressing words: "keo/keu/kew" (anyone), "karo" (anyone's),
+// "sobai/sabai/shobai/sokol" (everyone), or the literal "group".
+const GROUP_WIDE_RE = /\b(keo|keu|kew|kao|kau|karo|sobai|sabai|shobai|sobay|sokol|sokolke|sobai ke|sabai ke)\b/i;
+const GROUP_WORD_RE = /(^|\s)(group|grp|groop)(\s|$)/i;
+
+// True when the message is aimed at the whole group rather than one person
+// ("Keo aso?", "Sobai kemon aso?", "Kew ki jane?", "Group a keo ache?").
+function isGroupAddressed(text) {
+  const t = String(text || '');
+  return GROUP_WIDE_RE.test(t) || GROUP_WORD_RE.test(t);
+}
+
+const GREETING_RE = /\b(hi+|hello|helo|hlo|hallo|hey|salam|assalamu|assalam|walaikum|alaikum|shagotom|swagatom|good morning|good afternoon|good evening|good night|nomoshkar|namaste)\b/i;
+
+function isGreeting(text) {
+  return GREETING_RE.test(String(text || ''));
+}
+
+// ─── Group participant names (cached, short TTL) ───
+// Used only to detect messages clearly directed at ANOTHER member
+// ("Rahim koi?") so the bot stays silent during private conversations.
+const participantCache = new Map();
+const PARTICIPANT_TTL = 5 * 60 * 1000;
+
+async function getGroupParticipantNames(client, chatId) {
   try {
-    // 1) Explicit mention (@tag of the bot's number/LID)
-    if (message.mentionedIds && message.mentionedIds.length) {
-      const botDigits = String((botState && botState.botWid) || '').replace(/\D/g, '');
-      for (const id of message.mentionedIds) {
-        const raw = (id && id._serialized) ? id._serialized : String(id || '');
-        if (botDigits && raw.replace(/\D/g, '') === botDigits) return true;
+    const key = cleanGroupId(chatId);
+    const hit = participantCache.get(key);
+    if (hit && (Date.now() - hit.ts) < PARTICIPANT_TTL) return hit.names;
+    if (!client || !chatId) return [];
+    let names = [];
+    const chat = await client.getChatById(chatId);
+    if (chat && typeof chat.getParticipants === 'function') {
+      const parts = await chat.getParticipants();
+      names = (parts || []).map(p => (p && (p.pushname || p.name || (p.id && p.id.user))) || '').filter(Boolean);
+    } else if (chat && Array.isArray(chat.participants)) {
+      names = chat.participants.map(p => (p && p.id && p.id.user) || '').filter(Boolean);
+    }
+    participantCache.set(key, { names, ts: Date.now() });
+    return names;
+  } catch (e) {
+    return [];
+  }
+}
+
+// Names/surname fragments too generic to treat as a direct address.
+const NAME_STOP = new Set(['bhai', 'vai', 'bro', 'dude', 'bhaiya', 'vaiya', 'md', 'mr', 'mrs', 'khan', 'sir', 'boss', 'friend', 'friends', 'bondhu', 'dost', 'sathi', 'bhalo', 'valo']);
+
+// True when the message is clearly directed at a specific participant
+// ("Rahim koi?", "Karim tui kothay?", "Mahdi amar sathe kotha bol").
+// First-person self-introductions ("Ami Rahim", "amar nam Rahim") are NOT
+// counted — the speaker is talking about themselves, not to that person.
+function isDirectedToSpecificUser(text, botNames, participantNames) {
+  const t = String(text || '');
+  const names = (participantNames || []).map(n => String(n || '').trim()).filter(n => n.length >= 3);
+  if (names.length === 0) return false;
+
+  // "Ami Rahim" / "amar nam Rahim" — the name belongs to the SPEAKER here.
+  const selfIntro = t.match(/\b(?:ami|amar|amr|amake|i'?m|i am|my name is|my name)\s+([a-zA-Z][a-zA-Z' -]{1,24})/i);
+  if (selfIntro && selfIntro[1]) {
+    const introWord = selfIntro[1].trim().split(/\s+/)[0].toLowerCase();
+    if (names.some(n => n.toLowerCase() === introWord)) return false;
+  }
+
+  const botLower = botNames.map(n => n.toLowerCase());
+  for (const raw of names) {
+    const name = raw.toLowerCase();
+    if (botLower.includes(name)) continue; // bot's own name never counts
+    if (buildBotNameRe(raw).test(t)) return true;
+    // Multi-word pushnames: match significant individual tokens too.
+    for (const tok of raw.split(/\s+/)) {
+      if (tok.length >= 3 && !NAME_STOP.has(tok.toLowerCase())) {
+        if (buildBotNameRe(tok).test(t)) return true;
       }
     }
+  }
+  return false;
+}
 
-    // 2) Bot's name mentioned in text (word-boundary aware: "Rafi,", "@Rafi", "Rafi!")
-    const cfg = config || readJSON('config.json') || {};
-    const botName = String(cfg.botName || '').trim();
-    if (botName.length > 1) {
-      const nameRe = buildBotNameRe(botName);
-      const body = String(message.body || '');
+// ─── Message target classifier ───
+// Classifies a group message and returns structured signals. Decision
+// priority (from the product spec):
+//   1. Direct reply to bot message        → target: bot
+//   2. Bot name/alias mentioned           → target: bot
+//   3. Correction of bot misunderstanding → target: bot
+//   4. Open group question/general message → target: group
+//   5. Specific participant mentioned     → target: specific_user
+//   6. Unclear short message              → recent context decides
+// Signals include the bot's own WID, quoted-message metadata, configured
+// aliases, group participant names and recent history.
+async function classifyGroupMessage(message, client, botState, config, ctx = {}) {
+  const body = String(message.body || '');
+  const history = ctx.history || [];
+  const botNames = getBotNames(config);
 
-      // 2a) First-person self-reference with the bot's name — always addressed.
-      // Checked first so this guarantee can never be lost if the generic name
-      // check (2b) is later tightened.
-      if (isSelfReferenceIdentity(body, cfg)) {
-        console.log(`👤 Self-reference identity message (always addressed): "${body}"`);
-        return true;
-      }
-
-      // 2b) Any other use of the bot's name → clearly addressed
-      if (nameRe.test(body)) return true;
-    }
-
-    // 3) Reply to one of the bot's own messages
+  // 1) Reply metadata: quoted message belongs to the bot
+  let isReplyToBot = false;
+  try {
     const hasQuoted = typeof message.hasQuotedMsg === 'function'
       ? await message.hasQuotedMsg()
       : !!message.hasQuotedMsg;
     if (hasQuoted) {
       const quoted = await message.getQuotedMessage();
-      if (quoted && quoted.fromMe) return true;
+      const botDigits = String((botState && botState.botWid) || '').replace(/\D/g, '');
+      if (quoted && (quoted.fromMe || (botDigits && quoted.author && String(quoted.author).replace(/\D/g, '') === botDigits))) {
+        isReplyToBot = true;
+      }
     }
   } catch (e) {}
-  return false;
+
+  // @mention of the bot's number/LID
+  let isMentioned = false;
+  if (message.mentionedIds && message.mentionedIds.length) {
+    const botDigits = String((botState && botState.botWid) || '').replace(/\D/g, '');
+    for (const id of message.mentionedIds) {
+      const raw = (id && id._serialized) ? id._serialized : String(id || '');
+      if (botDigits && raw.replace(/\D/g, '') === botDigits) { isMentioned = true; break; }
+    }
+  }
+
+  const isReaction = isEmojiOnly(body);
+  const hasName = hasBotName(body, config);
+  const isSelfCorrection = isSelfReferenceIdentity(body, config);
+  const isGroupWide = isGroupAddressed(body);
+  const isQ = isQuestion(body);
+
+  let intent = 'casual';
+  if (isReaction) intent = 'reaction';
+  else if (isSelfCorrection) intent = 'correction';
+  else if (isQ) intent = 'question';
+  else if (isGreeting(body)) intent = 'greeting';
+
+  let target = 'unknown';
+  let shouldReply = false;
+  let confidence = 0;
+  let continuation = false;
+
+  // Priority 1: direct reply to the bot's own message
+  if (isReplyToBot) {
+    target = 'bot';
+    confidence = isReaction ? 0.7 : 0.95;
+    // Reactions are interaction but a full reply is config-controlled.
+    shouldReply = !isReaction;
+  }
+  // Priority 2: bot name / alias mentioned (also covers @mentions)
+  else if (isMentioned || hasName) {
+    target = 'bot';
+    confidence = 0.9;
+    shouldReply = true;
+  }
+  // Priority 3: correction of a previous bot misunderstanding (first-person
+  // use of the bot's name: "Ami Nahid naki?"). Kept explicit per spec.
+  else if (isSelfCorrection) {
+    target = 'bot';
+    confidence = 0.85;
+    shouldReply = true;
+  }
+  // Priority 4: open group question / general chat addressed to everyone
+  else if (isGroupWide) {
+    target = 'group';
+    intent = isQ ? 'question' : (intent === 'greeting' ? 'greeting' : 'casual');
+    confidence = isQ ? 0.8 : 0.6;
+    shouldReply = true; // participate — handler still applies chance/cooldown
+  }
+  // Priority 5: specific participant mentioned → stay silent
+  else {
+    const participantNames = await getGroupParticipantNames(client, message.from);
+    if (participantNames.length && isDirectedToSpecificUser(body, botNames, participantNames)) {
+      target = 'specific_user';
+      confidence = 0.75;
+      shouldReply = false;
+    } else {
+      // Priority 6: unclear short message → use recent context. If the last
+      // message in this chat was the bot's, the user is likely continuing the
+      // conversation with the bot ("ki?", "kemon?").
+      const lastEntry = history[history.length - 1];
+      if (lastEntry && lastEntry.role === 'model') {
+        continuation = true;
+        target = 'bot';
+        confidence = 0.55;
+        shouldReply = true;
+      } else {
+        target = 'unknown';
+        confidence = 0.3;
+        shouldReply = false;
+      }
+    }
+  }
+
+  return {
+    isReplyToBot,
+    isMentioned,
+    hasBotName: hasName,
+    isReaction,
+    isSelfCorrection,
+    isGroupWide,
+    target,          // 'bot' | 'group' | 'specific_user' | 'unknown'
+    intent,          // 'question' | 'greeting' | 'correction' | 'reaction' | 'casual'
+    shouldReply,     // whether the message deserves a reply (chance applied by caller)
+    confidence,      // 0..1
+    continuation     // true when recent-context continuation with the bot
+  };
 }
 
 // Build the group personality system prompt. Uses the admin-configured
@@ -266,6 +456,7 @@ function trimToNatural(text) {
 
 module.exports = {
   pickReactionEmoji,
+  isEmojiOnly,
   isLowContent,
   naturalDelay,
   markReplied,
@@ -278,7 +469,13 @@ module.exports = {
   isQuestion,
   shouldRandomReply,
   isSelfReferenceIdentity,
-  isBotAddressed,
+  getBotNames,
+  hasBotName,
+  isGroupAddressed,
+  isGreeting,
+  getGroupParticipantNames,
+  isDirectedToSpecificUser,
+  classifyGroupMessage,
   buildGroupPrompt,
   trimToNatural
 };

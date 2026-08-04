@@ -107,14 +107,6 @@ async function isBlocked(message, client) {
   return false;
 }
 
-function isEmojiOnly(text) {
-  const stripped = text.trim();
-  // Remove all known emoji ranges and check if anything remains
-  const emojiRegex = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{20E3}\u{231A}-\u{231B}\u{23E9}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25AB}\u{25B6}\u{25C0}\u{25FB}-\u{25FE}\u{2614}-\u{2615}\u{2648}-\u{2653}\u{267F}\u{2693}\u{26A1}\u{26AA}-\u{26AB}\u{26BD}-\u{26BE}\u{26C4}-\u{26C5}\u{26CE}\u{26D4}\u{26EA}\u{26F2}-\u{26F3}\u{26F5}\u{26FA}\u{26FD}\u{2702}\u{2705}\u{2708}-\u{270D}\u{270F}\u{2712}\u{2714}\u{2716}\u{271D}\u{2721}\u{2728}\u{2733}-\u{2734}\u{2744}\u{2747}\u{274C}\u{274E}\u{2753}-\u{2755}\u{2757}\u{2763}-\u{2764}\u{2795}-\u{2797}\u{27A1}\u{27B0}]/gu;
-  const withoutEmoji = stripped.replace(emojiRegex, '').replace(/\s/g, '');
-  return withoutEmoji.length === 0;
-}
-
 function getChatHistory(chatId) {
   if (!chatHistories[chatId]) chatHistories[chatId] = [];
   return chatHistories[chatId];
@@ -275,9 +267,10 @@ async function handleMessage(message, client) {
 
       if (isGroup) {
         // ─── Group Conversation Intelligence ───
-        // The bot listens to every message (context + memory), but only
-        // replies when addressed (@mention / named / reply-to) or when it
-        // randomly joins a conversation. Everything else may get a reaction.
+        // Every message is classified first (reply-to-bot, bot name/mention,
+        // self-correction, open group question, specific participant, or
+        // unclear) and the bot then decides whether to reply, react, or stay
+        // silent — like a natural group member.
         const gIntel = require('./group-intel');
         // Reaction chance (0 = disabled, null/undefined = default 0.12)
         const reactionChance = (() => {
@@ -287,34 +280,66 @@ async function handleMessage(message, client) {
 
         addToHistory(chatId, 'user', userMsg);
 
-        // Identity self-references ("Ami Nahid naki?" = "Am I Nahid?",
-        // "Ami Nahid na" = "I'm not Nahid") are always treated as addressed
-        // in EVERY group mode (chatty, normal, mention) — the user is talking
-        // about themselves with the bot's name, not to another person, so
-        // these messages can never be skipped. isBotAddressed handles this
-        // via its first-person self-reference branch.
-        const selfRefIdentity = gIntel.isSelfReferenceIdentity(userMsg, config);
-        const addressed = await gIntel.isBotAddressed(message, client, botState, config);
+        // Message target classification (uses quoted-message metadata, sender
+        // + bot IDs, bot aliases, participant names and recent history).
+        // NOTE: the current message was already added to history above, so we
+        // pass history minus the last entry — "recent context" means what the
+        // bot said BEFORE this message, never the message itself.
+        const signals = await gIntel.classifyGroupMessage(message, client, botState, config, {
+          history: getChatHistory(chatId).slice(0, -1)
+        });
 
-        // Remember the correction so later conversations don't mix up who is
-        // who ("Ami Nahid na" → fact: user is not the bot).
-        if (selfRefIdentity) {
+        // Remember identity corrections ("Ami Nahid na" → fact: user is not
+        // the bot) so later conversations don't mix up who is who.
+        if (signals.isSelfCorrection) {
+          console.log(`👤 Self-reference identity message (always addressed): "${userMsg}"`);
           const botName = String((config && config.botName) || '').trim() || 'the bot';
           memoryService.addFact(userKey, `Identity: user is not ${botName} (first-person clarification)`, rawSender);
         }
 
-        // Emoji-only messages: react sometimes, never spam a reply
-        if (isEmojiOnly(userMsg)) {
+        // ─── Emoji-only reactions ───
+        // Simple reactions normally get an emoji reaction back, not a full
+        // reply (avoids spam). A reaction attached to the bot's OWN message —
+        // or directly following the bot's last message — may still deserve a
+        // short reply when enabled in the admin panel.
+        let reacted = false;
+        let forceReply = false;
+        if (signals.isReaction) {
           if ((config.reactionsEnabled !== false) && Math.random() < reactionChance) {
             try { await message.react(gIntel.pickReactionEmoji(userMsg)); } catch (e) {}
+            reacted = true;
           }
-          memoryService.updateFromExchange(userKey, rawSender, userMsg, null, { chatId, isGroup });
-          return;
+          let reactReply = (signals.isReplyToBot || signals.continuation) && config.replyToReactions;
+          if (reactReply) {
+            let rr = parseFloat(config.reactionReplyChance);
+            if (isNaN(rr)) rr = 0.2;
+            if (/[?？]|🤔|🤨|❓/.test(userMsg)) rr = Math.max(rr, 0.5); // question-like reaction → more likely to answer
+            if (Math.random() < rr) forceReply = true;
+          }
+          if (!forceReply) {
+            memoryService.updateFromExchange(userKey, rawSender, userMsg, null, { chatId, isGroup });
+            return;
+          }
+          // fall through → send a short natural reply to the reaction
         }
 
-        // Not addressed → only join if content is worth it AND chance allows
-        if (!addressed && (gIntel.isLowContent(userMsg) || !gIntel.shouldRandomReply(chatId, config, userMsg))) {
-          if ((config.reactionsEnabled !== false) && Math.random() < reactionChance) {
+        // ─── Reply decision ───
+        //   bot           → always reply (name / @mention / reply-to / correction);
+        //                   unclear continuation only counts when not pure filler
+        //   group         → open question / group-wide chat: join by chance
+        //   unknown       → normal random participation
+        //   specific_user → stay silent (private conversation between members)
+        let doReply;
+        if (signals.target === 'bot') {
+          doReply = forceReply ? true : (signals.continuation ? !gIntel.isLowContent(userMsg) : true);
+        } else if (signals.target === 'group' || signals.target === 'unknown') {
+          doReply = !gIntel.isLowContent(userMsg) && gIntel.shouldRandomReply(chatId, config, userMsg);
+        } else {
+          doReply = false;
+        }
+
+        if (!doReply) {
+          if (!reacted && (config.reactionsEnabled !== false) && Math.random() < reactionChance) {
             try { await message.react(gIntel.pickReactionEmoji(userMsg)); } catch (e) {}
           }
           memoryService.updateFromExchange(userKey, rawSender, userMsg, null, { chatId, isGroup });
@@ -322,7 +347,10 @@ async function handleMessage(message, client) {
         }
 
         gIntel.markReplied(chatId);
-        console.log(`👥 Group reply (${addressed ? 'addressed' : 'joined conversation'}): ${chatId}`);
+        const joinLabel = signals.target === 'bot'
+          ? (signals.isReplyToBot ? 'replied-to bot' : 'addressed')
+          : (signals.target === 'group' ? 'open group message' : 'joined conversation');
+        console.log(`👥 Group reply (${joinLabel}): ${chatId}`);
 
         // Natural human pacing: read the message, then "type" the reply
         await sleep(gIntel.naturalDelay(userMsg, true));

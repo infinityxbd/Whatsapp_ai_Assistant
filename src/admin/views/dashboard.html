@@ -472,6 +472,9 @@
       <div class="card">
         <label>Bot Name</label>
         <input type="text" id="botName" placeholder="e.g. AI Assistant">
+        <label>Bot Aliases (comma-separated)</label>
+        <input type="text" id="botAliases" placeholder="e.g. Nahid vai, Nahid bhai">
+        <div style="font-size:12px;color:#8b949e;margin-top:4px;">Extra names the bot answers to in groups (besides its main name)</div>
         <label>AI Personality Prompt</label>
         <textarea id="botPrompt" placeholder="Describe how the bot should behave and respond..."></textarea>
         <br><br>
@@ -517,7 +520,7 @@
       <div style="border-top:1px solid rgba(37,211,102,0.12);padding-top:24px;margin-bottom:24px;">
         <div class="section-header" style="font-size:17px;"><span class="icon">🧠</span> Group Conversation Intelligence</div>
         <div class="info-banner">
-          The bot acts like a natural group member: it always answers when <b>@mentioned</b>, named, or replied-to, and otherwise <b>randomly joins</b> conversations. It never replies to filler messages ("ok", "ha"), respects a cooldown, and can react with emojis instead of typing.
+          The bot acts like a natural group member: it always answers when <b>@mentioned</b>, named, or <b>replied-to</b>, joins <b>open group questions</b> ("Keo aso?", "Sobai kemon aso?"), reacts to emoji, and stays silent during private conversations between members. It never replies to filler messages ("ok", "ha") and respects a cooldown.
         </div>
         <div class="card" style="max-width:700px;">
           <div class="toggle-card" style="padding:14px 18px;">
@@ -530,7 +533,17 @@
               <span class="toggle-slider"></span>
             </label>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div class="toggle-card" style="padding:14px 18px;">
+            <div class="toggle-info">
+              <div class="title">💬 Reply to Reactions on Bot Messages</div>
+              <div class="desc">Send a short reply when someone reacts (👍😂) to the bot's own message</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleReplyToReactions" onchange="saveReplySettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
             <div>
               <label>Random Reply Chance (0–1)</label>
               <input type="number" id="groupReplyChance" min="0" max="1" step="0.05" value="0.25">
@@ -545,6 +558,11 @@
               <label>Cooldown Between Replies (sec)</label>
               <input type="number" id="groupCooldownSec" min="0" step="5" value="45">
               <div class="helper">Time the bot stays quiet after its own message</div>
+            </div>
+            <div>
+              <label>Reaction Reply Chance (0–1)</label>
+              <input type="number" id="reactionReplyChance" min="0" max="1" step="0.05" value="0.2">
+              <div class="helper">Chance to answer when a reaction is on the bot's message</div>
             </div>
           </div>
           <label>Group Personality Prompt</label>
@@ -1460,10 +1478,13 @@
         const res = await fetch('/admin/api/settings', { credentials: 'same-origin' });
         const data = await res.json();
         document.getElementById('botName').value = data.botName || '';
+        document.getElementById('botAliases').value = data.botAliases || '';
         document.getElementById('botPrompt').value = data.botPrompt || '';
         document.getElementById('toggleInbox').checked = data.replyToInbox;
         document.getElementById('toggleGroups').checked = data.replyToGroups;
         document.getElementById('toggleReactions').checked = data.reactionsEnabled !== false;
+        document.getElementById('toggleReplyToReactions').checked = data.replyToReactions === true;
+        document.getElementById('reactionReplyChance').value = data.reactionReplyChance || 0.2;
         document.getElementById('groupReplyChance').value = data.groupReplyChance || 0.25;
         document.getElementById('questionBoostChance').value = data.questionBoostChance || 0.6;
         document.getElementById('groupCooldownSec').value = data.groupCooldownSec || 45;
@@ -1483,6 +1504,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             botName: document.getElementById('botName').value,
+            botAliases: document.getElementById('botAliases').value,
             botPrompt: document.getElementById('botPrompt').value
           })
         });
@@ -1501,6 +1523,8 @@
             replyToInbox: document.getElementById('toggleInbox').checked,
             replyToGroups: document.getElementById('toggleGroups').checked,
             reactionsEnabled: document.getElementById('toggleReactions').checked,
+            replyToReactions: document.getElementById('toggleReplyToReactions').checked,
+            reactionReplyChance: parseFloat(document.getElementById('reactionReplyChance').value) || 0,
             groupReplyChance: parseFloat(document.getElementById('groupReplyChance').value) || 0,
             questionBoostChance: parseFloat(document.getElementById('questionBoostChance').value) || 0,
             groupCooldownSec: parseInt(document.getElementById('groupCooldownSec').value) || 0,

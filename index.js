@@ -36,6 +36,7 @@ async function initDataFiles() {
       replyToInbox: true,
       replyToGroups: false,
       botName: 'AI Assistant',
+      botAliases: '',
       botEnabled: true,
       // Group Conversation Intelligence defaults
       groupPrompt: '',
@@ -43,6 +44,8 @@ async function initDataFiles() {
       groupCooldownSec: 45,
       reactionsEnabled: true,
       reactionChance: 0.12,
+      replyToReactions: false,
+      reactionReplyChance: 0.2,
       questionBoostChance: 0.6,
       groupSettings: {}
     };

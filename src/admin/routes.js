@@ -140,6 +140,7 @@ function createRoutes(botState, client) {
       replyToInbox: config.replyToInbox !== false,
       replyToGroups: config.replyToGroups === true,
       botName: config.botName || 'AI Assistant',
+      botAliases: config.botAliases || '',
       botEnabled: config.botEnabled !== false,
       // Group Conversation Intelligence
       groupPrompt: config.groupPrompt || '',
@@ -147,24 +148,30 @@ function createRoutes(botState, client) {
       groupCooldownSec: parseInt(config.groupCooldownSec) || 45,
       reactionsEnabled: config.reactionsEnabled !== false,
       reactionChance: parseFloat(config.reactionChance) || 0.12,
+      replyToReactions: config.replyToReactions === true,
+      reactionReplyChance: parseFloat(config.reactionReplyChance) || 0.2,
       questionBoostChance: parseFloat(config.questionBoostChance) || 0.6,
       groupSettings: config.groupSettings || {}
     });
   });
 
   router.post('/api/settings', (req, res) => {
-    const { botPrompt, replyToInbox, replyToGroups, botName, botEnabled, groupPrompt, groupReplyChance, groupCooldownSec, reactionsEnabled, reactionChance, questionBoostChance, groupSettings } = req.body;
+    const { botPrompt, replyToInbox, replyToGroups, botName, botAliases, botEnabled, groupPrompt, groupReplyChance, groupCooldownSec, reactionsEnabled, reactionChance, replyToReactions, reactionReplyChance, questionBoostChance, groupSettings } = req.body;
     const config = readJSON('config.json') || {};
 
     if (typeof botPrompt === 'string') config.botPrompt = botPrompt;
     if (typeof replyToInbox === 'boolean') config.replyToInbox = replyToInbox;
     if (typeof replyToGroups === 'boolean') config.replyToGroups = replyToGroups;
     if (typeof botName === 'string') config.botName = botName;
+    if (typeof botAliases === 'string') config.botAliases = botAliases.trim();
+    if (typeof botEnabled === 'boolean') config.botEnabled = botEnabled;
     if (typeof groupPrompt === 'string') config.groupPrompt = groupPrompt;
     if (groupReplyChance !== undefined) config.groupReplyChance = Math.min(Math.max(parseFloat(groupReplyChance) || 0, 1), 1);
     if (groupCooldownSec !== undefined) config.groupCooldownSec = Math.max(parseInt(groupCooldownSec) || 0, 0);
     if (typeof reactionsEnabled === 'boolean') config.reactionsEnabled = reactionsEnabled;
     if (reactionChance !== undefined) config.reactionChance = Math.min(Math.max(parseFloat(reactionChance) || 0, 1), 1);
+    if (typeof replyToReactions === 'boolean') config.replyToReactions = replyToReactions;
+    if (reactionReplyChance !== undefined) config.reactionReplyChance = Math.min(Math.max(parseFloat(reactionReplyChance) || 0, 0), 1);
     if (questionBoostChance !== undefined) config.questionBoostChance = Math.min(Math.max(parseFloat(questionBoostChance) || 0, 1), 1);
     if (groupSettings && typeof groupSettings === 'object') config.groupSettings = groupSettings;
 
