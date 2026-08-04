@@ -6,6 +6,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const { handleMessage } = require('./handler');
 const { autoClean } = require('./cache');
+const { saveUnsent } = require('./unsent');
 const { execSync } = require('child_process');
 const path = require('path');
 
@@ -382,7 +383,111 @@ client.on('disconnected', (reason) => {
 // Use message_create to catch ALL messages including self-sent
 // (library's 'message' event = MESSAGE_RECEIVED, skips fromMe)
 client.on('message_create', async (message) => {
+  cacheRecentMessage(message);
   await handleMessage(message, client);
+});
+
+// ─── Unsent (revoked) message tracking ───
+// whatsapp-web.js only keeps the LAST seen message, so for a message unsent
+// minutes later it hands us a revoke event with NO original text. We keep our
+// own rolling cache of recent messages (id → content) so we can recover the
+// original body of ANY unsent message — new or old — and log it to /unsent.
+const recentMessages = new Map();
+const RECENT_MSG_LIMIT = 2000;
+
+function cacheRecentMessage(message) {
+  try {
+    const mid = (message.id && (message.id._serialized || message.id.id)) || '';
+    if (!mid) return;
+    recentMessages.set(mid, {
+      from: message.from,
+      author: message.author || message.from,
+      body: message.body || '',
+      timestamp: message.timestamp,
+      type: String(message.from || '').endsWith('@g.us') ? 'group' : 'inbox'
+    });
+    // Trim oldest entries when the cache grows too large
+    if (recentMessages.size > RECENT_MSG_LIMIT) {
+      const oldest = recentMessages.keys().next().value;
+      recentMessages.delete(oldest);
+    }
+  } catch (e) {}
+}
+
+// Log an unsent (deleted for everyone) message into the /unsent buffer.
+// Works for BOTH freshly-sent and old messages: the library's `revokedMsg`
+// only carries the original text when the message was the last one seen, so
+// we fall back to our own recent-message cache, then to chat history lookup.
+client.on('message_revoke_everyone', async (message, revokedMsg) => {
+  try {
+    // Never track the bot's OWN unsent messages
+    if (message.fromMe) return;
+
+    const mid = (message.id && (message.id._serialized || message.id.id)) || '';
+    const isGroup = String(message.from || '').endsWith('@g.us');
+
+    // 1) Prefer the library's revokedMsg (original data, only for last-seen msg)
+    // 2) Else our rolling cache (any message seen recently)
+    // 3) Else try to fetch the original from the page store / chat history
+    let body = '';
+    let from = message.from;
+    let author = message.author || message.from;
+    let timestamp = message.timestamp;
+
+    if (revokedMsg && revokedMsg.body) {
+      body = revokedMsg.body;
+      from = revokedMsg.from || from;
+      author = revokedMsg.author || revokedMsg.from || author;
+      timestamp = revokedMsg.timestamp || timestamp;
+    } else if (mid) {
+      const cached = recentMessages.get(mid);
+      if (cached) {
+        body = cached.body;
+        from = cached.from || from;
+        author = cached.author || author;
+        timestamp = cached.timestamp || timestamp;
+      }
+    }
+    if (!body) {
+      // Old message with no cached copy — fetch its body from the page store
+      // before it's fully cleared (best effort).
+      try {
+        const fetched = await client.pupPage.evaluate((id) => {
+          try {
+            const Msg = window.require('WAWebCollections').Msg;
+            const m = Msg.get(id);
+            if (m) return { body: m.body || m.rawObj?.body || '', from: m.id?._serialized || '', author: m.author?._serialized || m.author || '', timestamp: m.t };
+          } catch (e) {}
+          return null;
+        }, mid);
+        if (fetched) {
+          body = fetched.body || body;
+          if (fetched.from) from = fetched.from;
+          if (fetched.author) author = fetched.author;
+          if (fetched.timestamp) timestamp = fetched.timestamp;
+        }
+      } catch (e) {}
+    }
+
+    let name = '';
+    try {
+      const chat = await client.getChatById(message.from);
+      name = chat.name || '';
+    } catch (e) {}
+
+    saveUnsent({
+      msgId: mid,
+      from: isGroup ? message.from : author,
+      author: isGroup ? author : '',
+      name: isGroup ? name : '',
+      time: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString(),
+      body: body || '[Unsent message — content unavailable]',
+      type: isGroup ? 'group' : 'inbox'
+    });
+    console.log(`🚫 Unsent message logged (${isGroup ? 'group' : 'inbox'}) from ${author}: "${String(body).slice(0, 60)}"`);
+  } catch (e) {
+    console.error('❌ Revoke handling error:', e.message);
+  }
 });
 
 module.exports = { client, botState, setBotStatus, resolveLid };

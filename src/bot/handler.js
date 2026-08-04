@@ -115,6 +115,7 @@ async function saveUnsentMessage(message, isGroup) {
   try { name = (await message.getChat()).name || ''; } catch (e) {}
   try {
     saveUnsent({
+      msgId: (message.id && (message.id._serialized || message.id.id)) || '',
       from: message.from,
       name,
       time: new Date().toISOString(),

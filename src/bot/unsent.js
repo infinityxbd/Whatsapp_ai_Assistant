@@ -18,8 +18,17 @@ function load() {
 
 function saveUnsent(entry) {
   const list = load();
+  const msgId = entry.msgId || '';
+  // Dedup: if the same message (by WhatsApp msgId) is already stored — e.g. it
+  // was saved as a blocked/muted message and later revoked — replace it once.
+  if (msgId) {
+    const idx = list.findIndex(u => u.msgId === msgId);
+    if (idx !== -1) list.splice(idx, 1);
+  }
   list.push({
+    msgId,
     from: entry.from,
+    author: entry.author || '',
     name: entry.name || '',
     time: entry.time || new Date().toISOString(),
     body: entry.body || '',
@@ -60,4 +69,15 @@ function clearUnsent() {
   writeJSON(FILE, []);
 }
 
-module.exports = { saveUnsent, listUnsent, listUnsentTyped, countUnsentTyped, clearUnsent, UNSENT_LIMIT };
+// Clear only the unsent entries of the given type and return how many were
+// removed. type === 'inbox' → private chats only, 'group' → groups only.
+function clearUnsentTyped(type) {
+  const list = load();
+  const kept = type === 'group'
+    ? list.filter(u => u.type !== 'group')
+    : list.filter(u => u.type === 'group');
+  writeJSON(FILE, kept);
+  return list.length - kept.length;
+}
+
+module.exports = { saveUnsent, listUnsent, listUnsentTyped, countUnsentTyped, clearUnsent, clearUnsentTyped, UNSENT_LIMIT };

@@ -53,8 +53,18 @@ async function reply(message, text, client) {
 // Show WHO sent an unsent message: the name when available, otherwise the
 // real phone number (LID IDs get resolved so they are recognizable).
 async function resolveUnsentWho(u, lidMap) {
+  // Group unsent — show the group, and who unsent it when known.
   if (u.type === 'group') {
-    return u.name ? `👥 ${u.name}` : `👥 Group ${cleanId(u.from)}`;
+    const group = u.name ? `👥 ${u.name}` : `👥 Group ${cleanId(u.from)}`;
+    if (u.author) {
+      const a = cleanId(u.author);
+      const aDigits = String(u.author || '').replace(/\D/g, '');
+      let who = a;
+      if (lidMap && lidMap[a]) who = lidMap[a];
+      else if (lidMap && lidMap[aDigits] && lidMap[aDigits] !== a) who = lidMap[aDigits];
+      return `${group} — 🚫 unsent by ${who}`;
+    }
+    return group;
   }
 
   if (u.name) return `👤 ${u.name}`;
@@ -338,6 +348,21 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       return true;
     }
 
+    // ─── Clear Unsent Messages ───
+    // /clearin → clear ALL inbox (private chat) unsent entries
+    // /cleargp → clear ALL group unsent entries
+    case '/clearin':
+    case '/cleargp': {
+      const unsentMod = require('./unsent');
+      const mode = cmd === '/clearin' ? 'inbox' : 'group';
+      const removed = unsentMod.clearUnsentTyped(mode);
+      const label = mode === 'inbox' ? '📥 Inbox' : '👥 Group';
+      await reply(message, removed > 0
+        ? `🧹 ${label} unsent cleared! (${removed} message${removed > 1 ? 's' : ''} removed)`
+        : `🧹 ${label} unsent already empty (0 to clear).`, client);
+      return true;
+    }
+
     // ─── Status ───
     case '/status': {
       const config = readJSON('config.json') || {};
@@ -425,6 +450,8 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
 /unsent <n> — Last n unsent (max 30)
 /unsentin <n> — Last n inbox unsent
 /unsentgp <n> — Last n group unsent
+/clearin — Clear all inbox unsent
+/cleargp — Clear all group unsent
 
 *Other:*
 /gplist — Group list
