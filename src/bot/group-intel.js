@@ -255,7 +255,7 @@ function resetGroupSettings(chatId, config) {
 // True when a message looks like a question. Careful with word lists: common
 // statement words ("eta", "ota", "ke", "amra"...) must NOT count, or the
 // bot gets more chatty on ordinary chatter — the opposite of natural.
-const QUESTION_BANGLA_RE = /\b(ki|keno|kivabe|kemne|kon|kothay|koto|kar|kokhon|kobe|ken)\b/i;
+const QUESTION_BANGLA_RE = /\b(ki|keno|kivabe|kemne|kemon|kamon|kon|kothay|koto|kar|kokhon|kobe|ken)\b/i;
 const QUESTION_EN_RE = /\b(why|what|how|where|when|who|which)\b/i;
 
 // First-person / self-reference markers (Bangla, Banglish and English).
@@ -439,7 +439,7 @@ function isDirectedToSpecificUser(text, botNames, participantNames) {
 //   3. Correction of bot misunderstanding → target: bot
 //   4. Open group question/general message → target: group
 //   5. Specific participant mentioned     → target: specific_user
-//   6. Unclear short message              → recent context decides
+//   6. Unclear short message              → main AI decides with context
 // Signals include the bot's own WID, quoted-message metadata, configured
 // aliases, group participant names and recent history.
 async function classifyGroupMessage(message, client, botState, config, ctx = {}) {
@@ -512,9 +512,13 @@ async function classifyGroupMessage(message, client, botState, config, ctx = {})
   // Priority 4: open group question / general chat addressed to everyone
   else if (isGroupWide) {
     target = 'group';
-    intent = isQ ? 'question' : (intent === 'greeting' ? 'greeting' : 'casual');
+    // Group-wide QUESTIONS get the dedicated 'open_question' intent. The bot
+    // is a group member, so these always deserve a reply — never skipped just
+    // because the bot's name isn't mentioned. Casual group chatter keeps a
+    // generic intent and stays chance-based in the handler.
+    intent = isQ ? 'open_question' : (intent === 'greeting' ? 'greeting' : 'casual');
     confidence = isQ ? 0.8 : 0.6;
-    shouldReply = true; // participate — handler still applies chance/cooldown
+    shouldReply = true; // handler may still apply chance for non-question chatter
   }
   // Priority 5: specific participant mentioned → stay silent
   else {
@@ -524,20 +528,18 @@ async function classifyGroupMessage(message, client, botState, config, ctx = {})
       confidence = 0.75;
       shouldReply = false;
     } else {
-      // Priority 6: unclear short message → use recent context. If the last
-      // message in this chat was the bot's, the user is likely continuing the
-      // conversation with the bot ("ki?", "kemon?").
+      // Priority 6: unclear message. The local classifier never forces a
+      // "bot-addressed" decision here: a person's name does NOT mean the bot
+      // is being called, and casual words like "tui"/"koi"/"re"/"ja" never
+      // mean the message is for the bot. Whether the user is continuing a
+      // conversation with the bot or chatting with another member is left to
+      // the main AI, which sees the full context. The "last message was the
+      // bot's" fact is passed only as a soft hint (continuation) for the AI.
       const lastEntry = history[history.length - 1];
-      if (lastEntry && lastEntry.role === 'model') {
-        continuation = true;
-        target = 'bot';
-        confidence = 0.55;
-        shouldReply = true;
-      } else {
-        target = 'unknown';
-        confidence = 0.3;
-        shouldReply = false;
-      }
+      continuation = !!(lastEntry && lastEntry.role === 'model');
+      target = 'unknown';
+      confidence = 0.3;
+      shouldReply = false;
     }
   }
 

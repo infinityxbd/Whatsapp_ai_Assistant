@@ -183,8 +183,8 @@ async function checkMutedArchived(chatId, client) {
 }
 
 // Rich context payload for the hybrid AI decision tier (unclear messages).
-// Includes sender identity, group + bot IDs, bot names/aliases, reply
-// metadata, the quoted message, and the recent messages.
+// Includes sender identity, group + bot IDs, bot names/aliases, group
+// participants, reply metadata, the quoted message, and the recent messages.
 async function buildGroupDecisionContext(message, client, botState, config, chatId, signals, history) {
   const ctx = {
     body: message.body || '',
@@ -194,11 +194,16 @@ async function buildGroupDecisionContext(message, client, botState, config, chat
     botName: String((config && config.botName) || '').trim() || 'AI Assistant',
     botNames: [],
     isReplyToBot: !!(signals && signals.isReplyToBot),
+    continuation: !!(signals && signals.continuation),
+    participantNames: [],
     quotedText: '',
     quotedAuthor: '',
     history: Array.isArray(history) ? history : []
   };
   try { ctx.botNames = require('./group-intel').getBotNames(config); } catch (e) {}
+  try {
+    ctx.participantNames = await require('./group-intel').getGroupParticipantNames(client, chatId);
+  } catch (e) {}
   try {
     const contact = await message.getContact();
     ctx.senderName = (contact && (contact.pushname || contact.name)) || '';
@@ -378,7 +383,8 @@ async function handleMessage(message, client) {
         // ─── Hybrid AI decision flow ───
         //   direct_ai        → bot-interaction: always reply (name / @mention /
         //                      reply-to / correction / forced reaction reply)
-        //   open_question_ai → group-wide question/chat: join by chance
+        //   open_question_ai → group-wide question/chat: QUESTIONS always
+        //                      reply, casual chatter joins by chance
         //   context_ai       → unclear message: main AI decides with context
         //   ignored          → specific_user / filler / AI intelligence off
         const groupAiOn = config.groupAiEnabled !== false;
@@ -392,22 +398,30 @@ async function handleMessage(message, client) {
           doReply = true;
         } else if (signals.target === 'bot') {
           processingType = 'direct_ai';
-          doReply = signals.continuation ? !gIntel.isLowContent(userMsg) : true;
+          doReply = true;
         } else if (groupAiOn && signals.target === 'group') {
           processingType = 'open_question_ai';
-          doReply = !gIntel.isLowContent(userMsg) && gIntel.shouldRandomReply(chatId, config, userMsg);
+          // Open group QUESTIONS always get a reply: the bot is a group member
+          // and the question invites anyone to answer ("Keo aso?", "Sobai kemon
+          // aso?", "Keu jane?"). This bypasses the random-chance gate and the
+          // cooldown — the per-minute rate limit and duplicate suppression
+          // below still apply. Non-question group chatter stays chance-based.
+          doReply = !gIntel.isLowContent(userMsg) && (signals.intent === 'open_question' || gIntel.shouldRandomReply(chatId, config, userMsg));
         } else if (signals.target === 'specific_user') {
           processingType = 'ignored'; // private conversation between members
           doReply = false;
         } else if (groupAiOn) {
           // Tier 4: unclear message → ask the main AI (with full context) to
           // decide. Anti-spam gates run BEFORE the AI call to save tokens.
+          // A genuine continuation of the bot's own last message ("kemon?") is
+          // allowed through the cooldown so natural back-and-forth survives;
+          // the per-minute rate limit still acts as the anti-spam backstop.
           processingType = 'context_ai';
           if (gIntel.isLowContent(userMsg)) {
             doReply = false;
           } else if (!gIntel.withinReplyRate(chatId, config.maxRepliesPerMinute)) {
             doReply = false;
-          } else if (gIntel.withinCooldown(chatId, config.groupCooldownSec)) {
+          } else if (!signals.continuation && gIntel.withinCooldown(chatId, config.groupCooldownSec)) {
             doReply = false;
           } else {
             const decisionCtx = await buildGroupDecisionContext(message, client, botState, config, chatId, signals, getChatHistory(chatId).slice(-(ctxLimit + 1), -1));
