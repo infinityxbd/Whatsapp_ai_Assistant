@@ -520,9 +520,29 @@
       <div style="border-top:1px solid rgba(37,211,102,0.12);padding-top:24px;margin-bottom:24px;">
         <div class="section-header" style="font-size:17px;"><span class="icon">🧠</span> Group Conversation Intelligence</div>
         <div class="info-banner">
-          The bot acts like a natural group member: it always answers when <b>@mentioned</b>, named, or <b>replied-to</b>, joins <b>open group questions</b> ("Keo aso?", "Sobai kemon aso?"), reacts to emoji, and stays silent during private conversations between members. It never replies to filler messages ("ok", "ha") and respects a cooldown.
+          <b>Hybrid AI decision flow:</b> the bot always answers <b>@mentions</b>, its <b>name/aliases</b>, and <b>replies to its own messages</b>; joins <b>open group questions</b> ("Keo aso?", "Sobai kemon aso?"); asks the main AI to decide on <b>unclear messages</b> (with sender + quoted + recent context); and stays silent during <b>private conversations</b> between members. Filler messages ("ok", "ha") never reach the AI — saving tokens.
         </div>
         <div class="card" style="max-width:700px;">
+          <div class="toggle-card" style="padding:14px 18px; border-color: rgba(88,166,255,0.25);">
+            <div class="toggle-info">
+              <div class="title">🧠 Group AI Intelligence</div>
+              <div class="desc">ON = hybrid flow (open questions + unclear messages use the AI). OFF = mention/direct-only — the bot only replies when named, @mentioned, or replied-to.</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleGroupAi" onchange="saveReplySettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="toggle-card" style="padding:14px 18px;">
+            <div class="toggle-info">
+              <div class="title">🐞 Debug Decision Logs</div>
+              <div class="desc">Log every group decision (direct_ai / open_question_ai / ignored / context_ai) with confidence + reply status to data/group-decisions.jsonl and the live log</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleDebugLogs" onchange="saveReplySettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
           <div class="toggle-card" style="padding:14px 18px;">
             <div class="toggle-info">
               <div class="title">😀 Emoji Reactions</div>
@@ -545,6 +565,20 @@
           </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
             <div>
+              <label>Reply Activity Level</label>
+              <select id="replyActivity" class="sel" onchange="saveReplySettings()">
+                <option value="low">🐢 Low</option>
+                <option value="normal">⚖️ Normal</option>
+                <option value="high">🚀 High</option>
+              </select>
+              <div class="helper">Scales random participation (0.5× / 1× / 1.5×)</div>
+            </div>
+            <div>
+              <label>Context Messages (3–10)</label>
+              <input type="number" id="contextMessageLimit" min="3" max="10" step="1" value="5">
+              <div class="helper">Recent messages sent with each AI call</div>
+            </div>
+            <div>
               <label>Random Reply Chance (0–1)</label>
               <input type="number" id="groupReplyChance" min="0" max="1" step="0.05" value="0.25">
               <div class="helper">0 = mention-only &nbsp;|&nbsp; 1 = reply to everything</div>
@@ -563,6 +597,21 @@
               <label>Reaction Reply Chance (0–1)</label>
               <input type="number" id="reactionReplyChance" min="0" max="1" step="0.05" value="0.2">
               <div class="helper">Chance to answer when a reaction is on the bot's message</div>
+            </div>
+            <div>
+              <label>Max Replies / Minute</label>
+              <input type="number" id="maxRepliesPerMinute" min="0" step="1" value="4">
+              <div class="helper">Per-group anti-spam cap (0 = unlimited)</div>
+            </div>
+            <div>
+              <label>Duplicate Reply Window (sec)</label>
+              <input type="number" id="duplicateReplySec" min="0" step="10" value="120">
+              <div class="helper">Skip repeating the same reply (0 = off)</div>
+            </div>
+            <div style="grid-column:1 / -1;">
+              <label>Group Whitelist (comma-separated group IDs)</label>
+              <input type="text" id="groupWhitelist" placeholder="e.g. 120363123456789012, 120363987654321098">
+              <div class="helper">Empty = participate in every group. Filled = only participate in these groups.</div>
             </div>
           </div>
           <label>Group Personality Prompt</label>
@@ -1489,6 +1538,13 @@
         document.getElementById('questionBoostChance').value = data.questionBoostChance || 0.6;
         document.getElementById('groupCooldownSec').value = data.groupCooldownSec || 45;
         document.getElementById('groupPrompt').value = data.groupPrompt || '';
+        document.getElementById('toggleGroupAi').checked = data.groupAiEnabled !== false;
+        document.getElementById('toggleDebugLogs').checked = data.debugDecisionLogs === true;
+        document.getElementById('replyActivity').value = data.replyActivity || 'normal';
+        document.getElementById('contextMessageLimit').value = data.contextMessageLimit || 5;
+        document.getElementById('maxRepliesPerMinute').value = data.maxRepliesPerMinute || 4;
+        document.getElementById('duplicateReplySec').value = data.duplicateReplySec || 120;
+        document.getElementById('groupWhitelist').value = (data.groupWhitelist || []).join(', ');
         document.getElementById('botNameSidebar').textContent = data.botName || 'AI Assistant';
         groupSettingsData = data.groupSettings || {};
         renderGroupModes();
@@ -1529,7 +1585,14 @@
             questionBoostChance: parseFloat(document.getElementById('questionBoostChance').value) || 0,
             groupCooldownSec: parseInt(document.getElementById('groupCooldownSec').value) || 0,
             groupPrompt: document.getElementById('groupPrompt').value,
-            groupSettings: groupSettingsData
+            groupSettings: groupSettingsData,
+            groupAiEnabled: document.getElementById('toggleGroupAi').checked,
+            debugDecisionLogs: document.getElementById('toggleDebugLogs').checked,
+            replyActivity: document.getElementById('replyActivity').value,
+            contextMessageLimit: parseInt(document.getElementById('contextMessageLimit').value) || 5,
+            maxRepliesPerMinute: parseInt(document.getElementById('maxRepliesPerMinute').value) || 4,
+            duplicateReplySec: parseInt(document.getElementById('duplicateReplySec').value) || 120,
+            groupWhitelist: document.getElementById('groupWhitelist').value
           })
         });
         showToast('Reply settings updated!');

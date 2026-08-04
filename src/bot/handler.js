@@ -8,7 +8,7 @@ const { readJSON } = require('../storage/store');
 const { handleCommand } = require('./commands');
 const memoryService = require('../memory/service');
 
-const MAX_HISTORY = 7;
+const MAX_HISTORY = 10;
 const chatHistories = {};
 const MAX_CONCURRENT = 3;
 let activeCount = 0;
@@ -182,6 +182,43 @@ async function checkMutedArchived(chatId, client) {
   return null;
 }
 
+// Rich context payload for the hybrid AI decision tier (unclear messages).
+// Includes sender identity, group + bot IDs, bot names/aliases, reply
+// metadata, the quoted message, and the recent messages.
+async function buildGroupDecisionContext(message, client, botState, config, chatId, signals, history) {
+  const ctx = {
+    body: message.body || '',
+    senderId: (message.author || message.from) || '',
+    groupId: chatId,
+    botWid: (botState && botState.botWid) || '',
+    botName: String((config && config.botName) || '').trim() || 'AI Assistant',
+    botNames: [],
+    isReplyToBot: !!(signals && signals.isReplyToBot),
+    quotedText: '',
+    quotedAuthor: '',
+    history: Array.isArray(history) ? history : []
+  };
+  try { ctx.botNames = require('./group-intel').getBotNames(config); } catch (e) {}
+  try {
+    const contact = await message.getContact();
+    ctx.senderName = (contact && (contact.pushname || contact.name)) || '';
+  } catch (e) {}
+  try {
+    const hasQuoted = typeof message.hasQuotedMsg === 'function' ? await message.hasQuotedMsg() : !!message.hasQuotedMsg;
+    if (hasQuoted) {
+      const q = await message.getQuotedMessage();
+      ctx.quotedText = (q && q.body) || '';
+      if (q) {
+        try {
+          const qc = await q.getContact();
+          ctx.quotedAuthor = (qc && (qc.pushname || qc.name)) || q.author || '';
+        } catch (e) { ctx.quotedAuthor = q.author || ''; }
+      }
+    }
+  } catch (e) {}
+  return ctx;
+}
+
 async function handleMessage(message, client) {
   try {
     if (message.type !== 'chat') return;
@@ -266,12 +303,27 @@ async function handleMessage(message, client) {
       const memoryContext = memoryService.buildContext(userKey, chatId);
 
       if (isGroup) {
-        // ─── Group Conversation Intelligence ───
+        // ─── Group Conversation Intelligence (Hybrid AI decision flow) ───
         // Every message is classified first (reply-to-bot, bot name/mention,
         // self-correction, open group question, specific participant, or
         // unclear) and the bot then decides whether to reply, react, or stay
-        // silent — like a natural group member.
+        // silent — like a natural group member. AI calls are reserved for:
+        //   1. direct bot interaction  → full AI reply, always
+        //   2. open group questions    → AI reply, by chance
+        //   4. unclear messages        → AI decision with full context
+        // Human-to-human messages are never sent to the AI (token saving).
         const gIntel = require('./group-intel');
+        const ctxLimit = Math.min(Math.max(parseInt(config.contextMessageLimit) || 5, 3), 10);
+        const logMsgId = message.id._serialized || message.id.id || message.id;
+        const logSender = isGroup ? (message.author || message.from) : message.from;
+
+        // Group whitelist: when set, the bot only participates in these groups
+        if (!gIntel.isGroupWhitelisted(message.from, config)) {
+          console.log(`⏭️ Group not in whitelist: ${chatId}`);
+          gIntel.logGroupDecision(config, { msgId: logMsgId, groupId: chatId, senderId: logSender, type: 'ignored', target: 'unknown', intent: '', confidence: 0, replyStatus: 'not_whitelisted', message: userMsg });
+          return;
+        }
+
         // Reaction chance (0 = disabled, null/undefined = default 0.12)
         const reactionChance = (() => {
           const rc = parseFloat(config.reactionChance);
@@ -323,22 +375,64 @@ async function handleMessage(message, client) {
           // fall through → send a short natural reply to the reaction
         }
 
-        // ─── Reply decision ───
-        //   bot           → always reply (name / @mention / reply-to / correction);
-        //                   unclear continuation only counts when not pure filler
-        //   group         → open question / group-wide chat: join by chance
-        //   unknown       → normal random participation
-        //   specific_user → stay silent (private conversation between members)
-        let doReply;
-        if (signals.target === 'bot') {
-          doReply = forceReply ? true : (signals.continuation ? !gIntel.isLowContent(userMsg) : true);
-        } else if (signals.target === 'group' || signals.target === 'unknown') {
+        // ─── Hybrid AI decision flow ───
+        //   direct_ai        → bot-interaction: always reply (name / @mention /
+        //                      reply-to / correction / forced reaction reply)
+        //   open_question_ai → group-wide question/chat: join by chance
+        //   context_ai       → unclear message: main AI decides with context
+        //   ignored          → specific_user / filler / AI intelligence off
+        const groupAiOn = config.groupAiEnabled !== false;
+        let doReply = false;
+        let processingType = 'ignored';
+        let aiDecision = null;
+        let aiReplyOverride = ''; // token-saver: the decision engine's draft reply
+
+        if (forceReply) {
+          processingType = 'direct_ai';
+          doReply = true;
+        } else if (signals.target === 'bot') {
+          processingType = 'direct_ai';
+          doReply = signals.continuation ? !gIntel.isLowContent(userMsg) : true;
+        } else if (groupAiOn && signals.target === 'group') {
+          processingType = 'open_question_ai';
           doReply = !gIntel.isLowContent(userMsg) && gIntel.shouldRandomReply(chatId, config, userMsg);
+        } else if (signals.target === 'specific_user') {
+          processingType = 'ignored'; // private conversation between members
+          doReply = false;
+        } else if (groupAiOn) {
+          // Tier 4: unclear message → ask the main AI (with full context) to
+          // decide. Anti-spam gates run BEFORE the AI call to save tokens.
+          processingType = 'context_ai';
+          if (gIntel.isLowContent(userMsg)) {
+            doReply = false;
+          } else if (!gIntel.withinReplyRate(chatId, config.maxRepliesPerMinute)) {
+            doReply = false;
+          } else if (gIntel.withinCooldown(chatId, config.groupCooldownSec)) {
+            doReply = false;
+          } else {
+            const decisionCtx = await buildGroupDecisionContext(message, client, botState, config, chatId, signals, getChatHistory(chatId).slice(-(ctxLimit + 1), -1));
+            aiDecision = await aiService.classifyGroupMessage(decisionCtx);
+            // Token-safety: a "shouldReply" without an actual draft reply is
+            // treated as "no reply" — one AI call per unclear message, never two.
+            const decisionOk = aiDecision.shouldReply === true && String(aiDecision.reply || '').trim().length > 0;
+            doReply = decisionOk;
+            if (decisionOk) aiReplyOverride = aiDecision.reply;
+          }
         } else {
+          // AI intelligence off → mention/direct-only behavior
+          processingType = 'ignored';
           doReply = false;
         }
 
+        // Reaction replies are bot-directed by definition (log consistency)
+        const logTarget = forceReply ? 'bot' : signals.target;
+
         if (!doReply) {
+          gIntel.logGroupDecision(config, {
+            msgId: logMsgId, groupId: chatId, senderId: logSender, type: processingType,
+            target: logTarget, intent: signals.intent, confidence: aiDecision ? aiDecision.confidence : signals.confidence,
+            aiDecision, replyStatus: 'skipped', message: userMsg
+          });
           if (!reacted && (config.reactionsEnabled !== false) && Math.random() < reactionChance) {
             try { await message.react(gIntel.pickReactionEmoji(userMsg)); } catch (e) {}
           }
@@ -346,10 +440,22 @@ async function handleMessage(message, client) {
           return;
         }
 
+        // ─── Anti-spam: per-group rate limit (direct interactions bypass the
+        // cooldown but still respect the per-minute cap) ───
+        if (!gIntel.withinReplyRate(chatId, config.maxRepliesPerMinute)) {
+          gIntel.logGroupDecision(config, {
+            msgId: logMsgId, groupId: chatId, senderId: logSender, type: processingType,
+            target: logTarget, intent: signals.intent, confidence: aiDecision ? aiDecision.confidence : signals.confidence,
+            aiDecision, replyStatus: 'rate_limited', message: userMsg
+          });
+          memoryService.updateFromExchange(userKey, rawSender, userMsg, null, { chatId, isGroup });
+          return;
+        }
         gIntel.markReplied(chatId);
-        const joinLabel = signals.target === 'bot'
-          ? (signals.isReplyToBot ? 'replied-to bot' : 'addressed')
-          : (signals.target === 'group' ? 'open group message' : 'joined conversation');
+        gIntel.markReplyTime(chatId);
+        const joinLabel = processingType === 'direct_ai'
+          ? (signals.isReplyToBot || forceReply ? 'replied-to bot' : 'addressed')
+          : (processingType === 'open_question_ai' ? 'open group message' : 'context_ai decision');
         console.log(`👥 Group reply (${joinLabel}): ${chatId}`);
 
         // Natural human pacing: read the message, then "type" the reply
@@ -363,10 +469,28 @@ async function handleMessage(message, client) {
         } catch (e) {}
         await sleep(600 + Math.random() * 1200);
 
-        const history = getChatHistory(chatId);
+        const history = getChatHistory(chatId).slice(-ctxLimit);
         const groupSystemPrompt = gIntel.buildGroupPrompt(config);
-        let aiResponse = await aiService.generateReply(userMsg, history, { memoryContext, systemPrompt: groupSystemPrompt });
+        let aiResponse;
+        if (aiReplyOverride) {
+          aiResponse = aiReplyOverride; // token-efficient: decision engine already drafted it
+        } else {
+          aiResponse = await aiService.generateReply(userMsg, history, { memoryContext, systemPrompt: groupSystemPrompt });
+        }
         aiResponse = gIntel.trimToNatural(aiResponse); // keep group replies short & human
+
+        // ─── Anti-spam: duplicate reply prevention ───
+        if (gIntel.isDuplicateReply(chatId, aiResponse, config.duplicateReplySec)) {
+          gIntel.logGroupDecision(config, {
+            msgId: logMsgId, groupId: chatId, senderId: logSender, type: processingType,
+            target: logTarget, intent: signals.intent, confidence: aiDecision ? aiDecision.confidence : signals.confidence,
+            aiDecision, replyStatus: 'duplicate_suppressed', message: userMsg
+          });
+          memoryService.updateFromExchange(userKey, rawSender, userMsg, null, { chatId, isGroup });
+          return;
+        }
+        gIntel.rememberReply(chatId, aiResponse);
+
         console.log(`🤖 Reply: "${aiResponse}"`);
         addToHistory(chatId, 'model', aiResponse);
         memoryService.updateFromExchange(userKey, rawSender, userMsg, aiResponse, { chatId, isGroup });
@@ -378,6 +502,11 @@ async function handleMessage(message, client) {
         } catch (e) {}
         await sendMessage(chatId, aiResponse, message, client);
         console.log(`✅ Sent to ${chatId}`);
+        gIntel.logGroupDecision(config, {
+          msgId: logMsgId, groupId: chatId, senderId: logSender, type: processingType,
+          target: logTarget, intent: signals.intent, confidence: aiDecision ? aiDecision.confidence : signals.confidence,
+          aiDecision, replyStatus: 'replied', message: userMsg
+        });
       } else {
         await sleep(randomBetween(1, 3));
         try { await client.sendSeen(chatId); } catch (e) {}

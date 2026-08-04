@@ -76,24 +76,25 @@ function updateAPIStats(apiId, success, responseTime, error) {
 
 class AIService {
   /**
-   * Generate a reply.
-   * @param {string} userMessage
-   * @param {Array}  conversationHistory  recent chat messages (short-term)
-   * @param {Object} [options]            { memoryContext } — compact user
-   *                                      memory prompt injected into the
-   *                                      system prompt (token-optimized).
+   * Shared provider loop: tries every active API in priority order and
+   * returns the first successful text response. Logs per-API attempts and
+   * updates health stats exactly like the old generateReply body.
    */
-  async generateReply(userMessage, conversationHistory = [], options = {}) {
+  async _ask(userMessage, conversationHistory = [], options = {}) {
     const activeAPIs = loadAPIs();
-
     if (activeAPIs.length === 0) {
       console.log('⚠️ No active AI APIs configured');
-      return getRandomFallback();
+      return { success: false, text: '', error: 'no_active_apis' };
     }
 
     const config = readJSON('config.json') || {};
     const botPrompt = config.botPrompt || 'You are a helpful assistant.';
+    const systemPrompt = (options && options.systemPrompt) || '';
     const memoryContext = (options && options.memoryContext) || '';
+    // Structured calls (e.g. the JSON decision engine) MUST keep their own
+    // instructions even when the API has a custom persona prompt configured,
+    // otherwise the model may return prose instead of the expected JSON.
+    const forceSystemPrompt = !!(options && options.forceSystemPrompt);
 
     for (const api of activeAPIs) {
       try {
@@ -104,16 +105,18 @@ class AIService {
         }
 
         const provider = createProvider(apiConfig);
-        // Precedence: per-API prompt > per-message override (e.g. the group
-        // personality prompt) > global bot prompt. The user-memory context is
-        // always appended (if present) so the model can personalize replies
-        // without sending full conversation history.
-        const overridePrompt = (options && options.systemPrompt) || '';
-        let systemPrompt = apiConfig.systemPrompt || overridePrompt || botPrompt;
+        // Normal precedence: per-API prompt > per-message override (e.g. the
+        // group personality prompt) > global bot prompt. For structured calls
+        // (forceSystemPrompt) the per-message instructions always win. The
+        // user-memory context is appended when present so the model can
+        // personalize replies without sending full conversation history.
+        let finalPrompt = forceSystemPrompt
+          ? (systemPrompt || apiConfig.systemPrompt || botPrompt)
+          : (apiConfig.systemPrompt || systemPrompt || botPrompt);
         if (memoryContext) {
-          systemPrompt += '\n\n' + memoryContext;
+          finalPrompt += '\n\n' + memoryContext;
         }
-        provider.systemPrompt = systemPrompt;
+        provider.systemPrompt = finalPrompt;
 
         console.log(`🤖 Trying: ${api.name} (${api.providerType}/${api.model})`);
         const result = await provider.generateReply(userMessage, conversationHistory);
@@ -121,7 +124,7 @@ class AIService {
         if (result.success) {
           console.log(`✅ ${api.name} responded in ${result.responseTime}s`);
           updateAPIStats(api.id, true, result.responseTime);
-          return result.text;
+          return { success: true, text: result.text };
         } else {
           console.log(`❌ ${api.name} failed: ${result.error}`);
           updateAPIStats(api.id, false, result.responseTime, result.error);
@@ -132,8 +135,92 @@ class AIService {
       }
     }
 
+    return { success: false, text: '', error: 'all_apis_failed' };
+  }
+
+  /**
+   * Generate a reply.
+   * @param {string} userMessage
+   * @param {Array}  conversationHistory  recent chat messages (short-term)
+   * @param {Object} [options]            { memoryContext, systemPrompt }
+   */
+  async generateReply(userMessage, conversationHistory = [], options = {}) {
+    const result = await this._ask(userMessage, conversationHistory, options);
+    if (result.success) return result.text;
     console.log('⚠️ All APIs failed, using fallback message');
     return getRandomFallback();
+  }
+
+  /**
+   * Hybrid AI decision flow — "unclear message" tier.
+   * Sends the message + full context (sender, group, bot WID, bot names,
+   * reply metadata, quoted message, last N messages) to the main AI and asks
+   * it to decide, as strict JSON:
+   *   { shouldReply, target, intent, confidence, reply }
+   * Returns a sanitized decision object. On failure it defaults to NOT
+   * replying (conservative — avoids token waste and spam).
+   * @param {Object} context  { body, senderName, senderId, groupId, botWid,
+   *                           botNames, isReplyToBot, quotedText, quotedAuthor,
+   *                           history }
+   */
+  async classifyGroupMessage(context = {}) {
+    const body = String(context.body || '').trim();
+    const botNames = (context.botNames || []).map(n => String(n)).filter(Boolean);
+    const namesTxt = botNames.length ? botNames.join(', ') : '(none) — the bot has no configured name';
+    const history = Array.isArray(context.history) ? context.history : [];
+
+    const lines = history.map((h, i) => {
+      const who = h.role === 'model' ? 'bot' : 'user';
+      return `${i + 1}. ${who}: ${String(h.text || '').replace(/\n/g, ' ')}`;
+    }).join('\n') || '(no recent messages)';
+
+    const decisionPrompt = `You are the decision engine for a WhatsApp GROUP bot named "${context.botName || 'AI Assistant'}" (it also answers to: ${namesTxt}).
+
+A new group message arrived. Decide whether the bot should reply and how.
+
+MESSAGE:
+"${body}"
+
+CONTEXT:
+- Sender: ${context.senderName || '(unknown)'} (${context.senderId || '?'})
+- Group: ${context.groupId || '?'}
+- Bot WhatsApp ID: ${context.botWid || '?'}
+- Is a reply to the bot's own message: ${context.isReplyToBot ? 'yes' : 'no'}
+- Quoted message: "${context.quotedText || '(none)'}"${context.quotedAuthor ? ` (sent by ${context.quotedAuthor})` : ''}
+- Recent messages (oldest → newest):\n${lines}
+
+DECISION RULES (follow strictly):
+1. Never decide from a keyword alone.
+2. A person's name in a message does NOT automatically mean the message is for that person.
+3. A person's name in a message does NOT automatically mean the message is for the bot.
+4. If clearly directed at the bot (its name/alias, @mention, or a reply to the bot's message) → shouldReply=true, target="bot".
+5. If it is an open question to the whole group ("Keo aso?", "Sobai kemon aso?", "Keu jane?") → shouldReply=true, target="group", reply like a natural short group member.
+6. If clearly directed at ANOTHER specific group member ("Rahim koi?") or a private human-to-human exchange → shouldReply=false, target="specific_user".
+7. If uncertain, prefer shouldReply=false UNLESS the context strongly suggests the conversation is continuing with the bot.
+8. The bot replies like a real person: SHORT (1-2 sentences), casual, natural, no bullet points, friendly mix of Bangla/Banglish and English, occasional emoji. Never mention being an AI or bot.
+
+Reply with ONLY a JSON object (no markdown, no extra text):
+{"shouldReply": true or false, "target": "bot" or "group" or "specific_user" or "unknown", "intent": "question" or "greeting" or "correction" or "reaction" or "casual" or "human_chat", "confidence": 0 to 1, "reply": "short natural reply if shouldReply=true, else empty string"}`;
+
+    const result = await this._ask(body, [], { systemPrompt: decisionPrompt, forceSystemPrompt: true });
+    const parsed = parseDecisionJson(result.success ? result.text : '');
+
+    if (!parsed) {
+      console.log(`🧠 Decision engine failed (${result.error || 'unparseable'}) → default: no reply`);
+      return { shouldReply: false, target: 'unknown', intent: 'casual', confidence: 0, reply: '' };
+    }
+
+    const validTargets = ['bot', 'group', 'specific_user', 'unknown'];
+    const validIntents = ['question', 'greeting', 'correction', 'reaction', 'casual', 'human_chat'];
+    const conf = parseFloat(parsed.confidence);
+    const reply = String(parsed.reply || '').trim();
+    return {
+      shouldReply: parsed.shouldReply === true,
+      target: validTargets.includes(parsed.target) ? parsed.target : 'unknown',
+      intent: validIntents.includes(parsed.intent) ? parsed.intent : 'casual',
+      confidence: isNaN(conf) ? 0 : Math.min(Math.max(conf, 0), 1),
+      reply
+    };
   }
 
   async testAPI(apiId) {
@@ -159,6 +246,27 @@ class AIService {
       error: result.error || null,
       preview: result.success ? result.text.substring(0, 200) : null
     };
+  }
+}
+
+// Robustly extract a JSON object from a model response: tolerates markdown
+// fences, surrounding prose and trailing punctuation.
+function parseDecisionJson(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const fenced = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1] : t;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(candidate.slice(start, end + 1));
+    } catch (e) {}
+  }
+  try {
+    return JSON.parse(candidate);
+  } catch (e) {
+    return null;
   }
 }
 

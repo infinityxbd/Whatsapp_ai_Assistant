@@ -47,7 +47,15 @@ async function initDataFiles() {
       replyToReactions: false,
       reactionReplyChance: 0.2,
       questionBoostChance: 0.6,
-      groupSettings: {}
+      groupSettings: {},
+      // Hybrid AI decision flow defaults
+      groupAiEnabled: true,
+      contextMessageLimit: 5,
+      replyActivity: 'normal',
+      groupWhitelist: [],
+      maxRepliesPerMinute: 4,
+      duplicateReplySec: 120,
+      debugDecisionLogs: false
     };
     writeJSON('config.json', config);
     console.log('📁 Created default config.json');

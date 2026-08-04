@@ -13,6 +13,9 @@
  *   • Human-like typing delay proportional to message length
  */
 
+const fs = require('fs');
+const path = require('path');
+
 // ─── Emoji pools for reactions ───
 const REACT_POSITIVE = ['👍', '❤️', '👏', '🔥'];
 const REACT_NEGATIVE = ['😢', '🥺', '💔'];
@@ -94,6 +97,126 @@ function withinCooldown(chatId, cooldownSec) {
   const sec = isNaN(parsed) ? 45 : parsed; // 0 = no cooldown, null = default 45
   if (sec <= 0) return false;
   return (Date.now() - last) < sec * 1000;
+}
+
+// ─── Hybrid AI anti-spam: per-group reply rate limit ───
+// Sliding 60-second window: the bot never sends more than `maxPerMinute`
+// replies in a group, no matter how chatty the flow gets.
+const replyTimes = new Map(); // cleanGroupId -> [timestamps]
+
+function withinReplyRate(chatId, maxPerMinute) {
+  const key = cleanGroupId(chatId);
+  const max = parseInt(maxPerMinute);
+  const limit = isNaN(max) ? 4 : max; // null/undefined/NaN → default 4
+  if (limit <= 0) return true; // 0 = unlimited
+  const now = Date.now();
+  const windowStart = now - 60000;
+  const times = (replyTimes.get(key) || []).filter(t => t > windowStart);
+  return times.length < limit;
+}
+
+function markReplyTime(chatId) {
+  const key = cleanGroupId(chatId);
+  const now = Date.now();
+  const times = (replyTimes.get(key) || []).filter(t => t > now - 60000);
+  times.push(now);
+  replyTimes.set(key, times);
+  if (replyTimes.size > 500) {
+    const oldest = replyTimes.keys().next().value;
+    replyTimes.delete(oldest);
+  }
+}
+
+// ─── Hybrid AI anti-spam: duplicate reply prevention ───
+// The bot never sends the SAME reply text to a group twice within a window
+// (e.g. two "Kemon aso?" questions right after each other).
+const lastReplies = new Map(); // cleanGroupId -> [{text, ts}]
+
+function normText(text) {
+  return String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isDuplicateReply(chatId, text, duplicateSec) {
+  const key = cleanGroupId(chatId);
+  const sec = parseInt(duplicateSec);
+  const window = isNaN(sec) ? 120 : sec; // null/undefined/NaN → default 120s
+  if (window <= 0) return false; // 0 = disabled
+  const now = Date.now();
+  const norm = normText(text);
+  if (!norm) return false;
+  const list = (lastReplies.get(key) || []).filter(r => r.ts > now - window * 1000);
+  return list.some(r => r.text === norm);
+}
+
+function rememberReply(chatId, text) {
+  const key = cleanGroupId(chatId);
+  const list = lastReplies.get(key) || [];
+  list.push({ text: normText(text), ts: Date.now() });
+  if (list.length > 30) list.shift();
+  lastReplies.set(key, list);
+}
+
+// ─── Reply activity level ───
+// Admin control: 'low' → half the normal participation, 'high' → 1.5x
+// (capped at 1). 'normal' (default) leaves chances untouched.
+function activityMultiplier(activity) {
+  const a = String(activity || '').toLowerCase();
+  if (a === 'low') return 0.5;
+  if (a === 'high') return 1.5;
+  return 1;
+}
+
+// True when a group is allowed to receive spontaneous replies. An EMPTY
+// whitelist means "every group is allowed". When the whitelist is non-empty
+// only the listed group IDs are allowed.
+function isGroupWhitelisted(chatId, config) {
+  const raw = config && config.groupWhitelist;
+  const list = Array.isArray(raw)
+    ? raw
+    : String(raw || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (list.length === 0) return true;
+  const key = cleanGroupId(chatId);
+  return list.some(id => cleanGroupId(id) === key);
+}
+
+// ─── Hybrid AI decision log ───
+// EVERY group decision is appended to data/group-decisions.jsonl (git-ignored
+// and auto-rotated) so the audit trail exists by default, per the product
+// spec. The debugDecisionLogs toggle controls only the verbose console output.
+function logGroupDecision(config, entry) {
+  const verbose = config && config.debugDecisionLogs === true;
+  const record = {
+    time: new Date().toISOString(),
+    msgId: entry.msgId || '',
+    groupId: entry.groupId || '',
+    senderId: entry.senderId || '',
+    type: entry.type || 'unknown',
+    target: entry.target || '',
+    intent: entry.intent || '',
+    confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
+    aiDecision: entry.aiDecision || null,
+    replyStatus: entry.replyStatus || 'none',
+    message: entry.message || ''
+  };
+  try {
+    const file = path.join(__dirname, '..', '..', 'data', 'group-decisions.jsonl');
+    fs.appendFileSync(file, JSON.stringify(record) + '\n');
+    // Rotate: keep only the last 2000 decision lines (bounded disk usage).
+    try {
+      const size = fs.statSync(file).size;
+      if (size > 2 * 1024 * 1024) {
+        const lines = fs.readFileSync(file, 'utf-8').split('\n').filter(l => l.length > 0);
+        if (lines.length > 2000) {
+          fs.writeFileSync(file, lines.slice(-2000).join('\n') + '\n', 'utf-8');
+        }
+      }
+    } catch (e) {}
+  } catch (e) {}
+  if (verbose) {
+    const label = entry.replyStatus === 'replied' ? '✅' : '⏭️';
+    console.log(`${label} Group decision [${entry.type}] ${entry.replyStatus} | target=${entry.target} intent=${entry.intent} conf=${entry.confidence} | "${record.message}"`);
+  }
+  return record;
 }
 
 // ─── Per-group settings ───
@@ -178,9 +301,12 @@ function shouldRandomReply(chatId, config, userMsg) {
     chance = Math.max(chance, isNaN(boost) ? 0.6 : boost);
   }
 
+  // Reply activity level scales the final chance (low 0.5x / high 1.5x)
+  chance = Math.min(chance * activityMultiplier(config && config.replyActivity), 1);
+
   if (chance <= 0) return false;
   if (withinCooldown(chatId, config.groupCooldownSec)) return false;
-  return Math.random() < Math.min(chance, 1);
+  return Math.random() < chance;
 }
 
 // Word-boundary aware regex for the bot's name in text ("Rafi,", "@Rafi", "Rafi!").
@@ -461,6 +587,13 @@ module.exports = {
   naturalDelay,
   markReplied,
   withinCooldown,
+  withinReplyRate,
+  markReplyTime,
+  isDuplicateReply,
+  rememberReply,
+  activityMultiplier,
+  isGroupWhitelisted,
+  logGroupDecision,
   cleanGroupId,
   getGroupSetting,
   setGroupMode,

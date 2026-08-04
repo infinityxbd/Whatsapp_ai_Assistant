@@ -151,12 +151,20 @@ function createRoutes(botState, client) {
       replyToReactions: config.replyToReactions === true,
       reactionReplyChance: parseFloat(config.reactionReplyChance) || 0.2,
       questionBoostChance: parseFloat(config.questionBoostChance) || 0.6,
-      groupSettings: config.groupSettings || {}
+      groupSettings: config.groupSettings || {},
+      // Hybrid AI decision flow
+      groupAiEnabled: config.groupAiEnabled !== false,
+      contextMessageLimit: Math.min(Math.max(parseInt(config.contextMessageLimit) || 5, 3), 10),
+      replyActivity: ['low', 'normal', 'high'].includes(config.replyActivity) ? config.replyActivity : 'normal',
+      groupWhitelist: Array.isArray(config.groupWhitelist) ? config.groupWhitelist : String(config.groupWhitelist || '').split(',').map(s => s.trim()).filter(Boolean),
+      maxRepliesPerMinute: parseInt(config.maxRepliesPerMinute) || 4,
+      duplicateReplySec: parseInt(config.duplicateReplySec) || 120,
+      debugDecisionLogs: config.debugDecisionLogs === true
     });
   });
 
   router.post('/api/settings', (req, res) => {
-    const { botPrompt, replyToInbox, replyToGroups, botName, botAliases, botEnabled, groupPrompt, groupReplyChance, groupCooldownSec, reactionsEnabled, reactionChance, replyToReactions, reactionReplyChance, questionBoostChance, groupSettings } = req.body;
+    const { botPrompt, replyToInbox, replyToGroups, botName, botAliases, botEnabled, groupPrompt, groupReplyChance, groupCooldownSec, reactionsEnabled, reactionChance, replyToReactions, reactionReplyChance, questionBoostChance, groupSettings, groupAiEnabled, contextMessageLimit, replyActivity, groupWhitelist, maxRepliesPerMinute, duplicateReplySec, debugDecisionLogs } = req.body;
     const config = readJSON('config.json') || {};
 
     if (typeof botPrompt === 'string') config.botPrompt = botPrompt;
@@ -174,6 +182,18 @@ function createRoutes(botState, client) {
     if (reactionReplyChance !== undefined) config.reactionReplyChance = Math.min(Math.max(parseFloat(reactionReplyChance) || 0, 0), 1);
     if (questionBoostChance !== undefined) config.questionBoostChance = Math.min(Math.max(parseFloat(questionBoostChance) || 0, 1), 1);
     if (groupSettings && typeof groupSettings === 'object') config.groupSettings = groupSettings;
+    // Hybrid AI decision flow
+    if (typeof groupAiEnabled === 'boolean') config.groupAiEnabled = groupAiEnabled;
+    if (contextMessageLimit !== undefined) config.contextMessageLimit = Math.min(Math.max(parseInt(contextMessageLimit) || 5, 3), 10);
+    if (replyActivity !== undefined && ['low', 'normal', 'high'].includes(replyActivity)) config.replyActivity = replyActivity;
+    if (groupWhitelist !== undefined) {
+      config.groupWhitelist = Array.isArray(groupWhitelist)
+        ? groupWhitelist.map(String).map(s => s.trim()).filter(Boolean)
+        : String(groupWhitelist).split(',').map(s => s.trim()).filter(Boolean);
+    }
+    if (maxRepliesPerMinute !== undefined) config.maxRepliesPerMinute = Math.max(parseInt(maxRepliesPerMinute) || 0, 0);
+    if (duplicateReplySec !== undefined) config.duplicateReplySec = Math.max(parseInt(duplicateReplySec) || 0, 0);
+    if (typeof debugDecisionLogs === 'boolean') config.debugDecisionLogs = debugDecisionLogs;
 
     writeJSON('config.json', config);
     res.json({ success: true });
@@ -596,7 +616,24 @@ function createRoutes(botState, client) {
             replyToInbox: true,
             replyToGroups: false,
             botName: 'AI Assistant',
-            botEnabled: true
+            botAliases: '',
+            botEnabled: true,
+            groupPrompt: '',
+            groupReplyChance: 0.25,
+            groupCooldownSec: 45,
+            reactionsEnabled: true,
+            reactionChance: 0.12,
+            replyToReactions: false,
+            reactionReplyChance: 0.2,
+            questionBoostChance: 0.6,
+            groupSettings: {},
+            groupAiEnabled: true,
+            contextMessageLimit: 5,
+            replyActivity: 'normal',
+            groupWhitelist: [],
+            maxRepliesPerMinute: 4,
+            duplicateReplySec: 120,
+            debugDecisionLogs: false
           });
           writeJSON('apikeys.json', []);
           writeJSON('blocklist.json', { numbers: [], groups: [] });
