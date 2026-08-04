@@ -111,6 +111,7 @@ cd whatsapp_ai_Assistant
 
 # setup and install dependencies
  bash set.sh
+
 ---
 
 ## 📱 Admin Panel
