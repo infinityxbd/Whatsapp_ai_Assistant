@@ -109,17 +109,8 @@ chmod +x setup.sh
 git clone https://github.com/infinityxbd/Whatsapp_ai_Assistant.git
 cd whatsapp_ai_Assistant
 
-# Install dependencies
-npm install
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings
-
-# Start the bot
-npm start
-```
-
+# setup and install dependencies
+ bash set.sh
 ---
 
 ## 📱 Admin Panel
