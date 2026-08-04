@@ -45,8 +45,19 @@ function listUnsentTyped(type, count) {
   return list.slice(-n);
 }
 
+// Return the total number of stored unsent entries for the given type.
+// type === 'inbox' → private chats only, 'group' → groups, 'all' → both.
+function countUnsentTyped(type) {
+  const list = load();
+  const inbox = list.filter(u => u.type !== 'group').length;
+  const group = list.filter(u => u.type === 'group').length;
+  if (type === 'inbox') return { inbox };
+  if (type === 'group') return { group };
+  return { inbox, group };
+}
+
 function clearUnsent() {
   writeJSON(FILE, []);
 }
 
-module.exports = { saveUnsent, listUnsent, listUnsentTyped, clearUnsent, UNSENT_LIMIT };
+module.exports = { saveUnsent, listUnsent, listUnsentTyped, countUnsentTyped, clearUnsent, UNSENT_LIMIT };

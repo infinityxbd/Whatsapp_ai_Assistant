@@ -50,6 +50,34 @@ async function reply(message, text, client) {
   }
 }
 
+// Show WHO sent an unsent message: the name when available, otherwise the
+// real phone number (LID IDs get resolved so they are recognizable).
+async function resolveUnsentWho(u, lidMap) {
+  if (u.type === 'group') {
+    return u.name ? `👥 ${u.name}` : `👥 Group ${cleanId(u.from)}`;
+  }
+
+  if (u.name) return `👤 ${u.name}`;
+
+  const clean = cleanId(u.from);
+  const digits = String(u.from || '').replace(/\D/g, '');
+
+  // In-memory LID map first (fast)
+  if (lidMap) {
+    if (lidMap[clean]) return `👤 ${lidMap[clean]}`;
+    if (lidMap[digits] && lidMap[digits] !== clean) return `👤 ${lidMap[digits]}`;
+  }
+
+  // Fallback: resolve LID → real phone via client
+  try {
+    const { resolveLid } = require('./whatsapp');
+    const phone = await resolveLid(u.from);
+    if (phone) return `👤 ${phone}`;
+  } catch (e) {}
+
+  return clean ? `👤 ${clean}` : '👤 Unknown';
+}
+
 async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
   const body = message.body.trim();
   if (!body.startsWith('/')) return false;
@@ -242,6 +270,7 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
     // ─── Unsent Messages ───
     // Shows messages the bot did NOT reply to (blocked senders, blocked
     // groups, muted/archived chats). Buffer is capped at 30 (auto-clean).
+    // Sender shown as name (if available) else real phone number.
     //   /unsent            → last 10, both inbox + group
     //   /unsent <n>          → last n (max 30), both
     //   /unsentin [n]        → last n inbox (private) only
@@ -254,43 +283,55 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
         : cmd === '/unsentgp' ? 'group'
         : 'all';
       const requested = param ? parseInt(param) : 10;
-      const list = unsentMod.listUnsentTyped(mode, requested) || [];
+      const n = Math.min(Math.max(requested || 10, 1), unsentMod.UNSENT_LIMIT);
+      const counts = unsentMod.countUnsentTyped(mode);
 
-      const fmt = (arr) => arr.map((u, i) => {
-        const time = u.time ? new Date(u.time).toLocaleString() : '';
-        const who = u.name ? `${u.name} (${cleanId(u.from)})` : cleanId(u.from);
-        return `${i + 1}. ${who}\n   📅 ${time}\n   💬 ${String(u.body || '').slice(0, 80)}`;
-      });
+      const fmt = async (arr) => {
+        const out = [];
+        for (let i = 0; i < arr.length; i++) {
+          const u = arr[i];
+          const time = u.time ? new Date(u.time).toLocaleString() : '';
+          const who = await resolveUnsentWho(u, lidMap);
+          out.push(`${i + 1}. ${who}\n   📅 ${time}\n   💬 ${String(u.body || '').slice(0, 80)}`);
+        }
+        return out;
+      };
+
+      const shownNote = (total) => total > n ? ` (showing last ${n} of ${total})` : '';
 
       if (mode === 'inbox') {
-        if (list.length) {
-          await reply(message, `📥 *Inbox unsent: ${list.length}*\n\n${fmt(list).join('\n')}`, client);
+        const total = counts.inbox;
+        if (total) {
+          const list = unsentMod.listUnsentTyped('inbox', n) || [];
+          await reply(message, `📥 *Inbox unsent: ${total} total*${shownNote(total)}\n\n${(await fmt(list)).join('\n')}`, client);
         } else {
           await reply(message, '📥 Inbox unsent: 0 (none).', client);
         }
         return true;
       }
       if (mode === 'group') {
-        if (list.length) {
-          await reply(message, `👥 *Group unsent: ${list.length}*\n\n${fmt(list).join('\n')}`, client);
+        const total = counts.group;
+        if (total) {
+          const list = unsentMod.listUnsentTyped('group', n) || [];
+          await reply(message, `👥 *Group unsent: ${total} total*${shownNote(total)}\n\n${(await fmt(list)).join('\n')}`, client);
         } else {
           await reply(message, '👥 Group unsent: 0 (none).', client);
         }
         return true;
       }
 
-      // mode === 'all' → split by type
-      const group = []; const inbox = [];
-      for (const u of list) {
-        (u.type === 'group' ? group : inbox).push(u);
-      }
-      if (group.length) {
-        await reply(message, `👥 *Group unsent: ${group.length}*\n\n${fmt(group).join('\n')}`, client);
+      // mode === 'all' → show last n of each type with real totals
+      const groupTotal = counts.group;
+      if (groupTotal) {
+        const list = unsentMod.listUnsentTyped('group', n) || [];
+        await reply(message, `👥 *Group unsent: ${groupTotal} total*${shownNote(groupTotal)}\n\n${(await fmt(list)).join('\n')}`, client);
       } else {
         await reply(message, '👥 Group unsent: 0 (none).', client);
       }
-      if (inbox.length) {
-        await reply(message, `📥 *Inbox unsent: ${inbox.length}*\n\n${fmt(inbox).join('\n')}`, client);
+      const inboxTotal = counts.inbox;
+      if (inboxTotal) {
+        const list = unsentMod.listUnsentTyped('inbox', n) || [];
+        await reply(message, `📥 *Inbox unsent: ${inboxTotal} total*${shownNote(inboxTotal)}\n\n${(await fmt(list)).join('\n')}`, client);
       } else {
         await reply(message, '📥 Inbox unsent: 0 (none).', client);
       }
