@@ -825,6 +825,62 @@ function createRoutes(botState, client) {
     res.json({ success: true, enabled: config.autoUpdate, interval: config.autoUpdateInterval || 1440 });
   });
 
+  // ─── User Memory System (admin controls) ───
+  const memoryService = require('../memory/service');
+
+  // List users + global status
+  router.get('/api/memory', (req, res) => {
+    res.json({
+      globalEnabled: memoryService.isGloballyEnabled(),
+      users: memoryService.listProfiles()
+    });
+  });
+
+  // Static routes FIRST so they are never captured by /:key param routes
+  // Global enable/disable
+  router.post('/api/memory/toggle', (req, res) => {
+    const { enabled } = req.body;
+    memoryService.setGlobalEnabled(enabled === true);
+    console.log(`🧠 Memory system ${enabled ? 'ENABLED' : 'DISABLED'} globally`);
+    res.json({ success: true, globalEnabled: enabled === true });
+  });
+
+  // Full profile (with short-term when available in memory)
+  router.get('/api/memory/:key', (req, res) => {
+    const key = req.params.key;
+    const profile = memoryService.getProfileView(key);
+    if (!profile) return res.status(404).json({ error: 'No memory found for this user' });
+    res.json(profile);
+  });
+
+  // Edit memory (name, language, style, notes, interests, facts, preferences, enabled)
+  router.put('/api/memory/:key', (req, res) => {
+    const profile = memoryService.updateProfile(req.params.key, req.body);
+    console.log(`🧠 Memory updated for ${req.params.key}`);
+    res.json({ success: true, profile });
+  });
+
+  // Delete user memory (privacy)
+  router.delete('/api/memory/:key', (req, res) => {
+    memoryService.deleteProfile(req.params.key);
+    console.log(`🧠 Memory deleted for ${req.params.key}`);
+    res.json({ success: true });
+  });
+
+  // Per-user enable/disable
+  router.post('/api/memory/:key/toggle', (req, res) => {
+    const { enabled } = req.body;
+    memoryService.setUserEnabled(req.params.key, enabled === true);
+    console.log(`🧠 Memory ${enabled ? 'ENABLED' : 'DISABLED'} for ${req.params.key}`);
+    res.json({ success: true, memoryEnabled: enabled === true });
+  });
+
+  // Clear short-term only (keeps long-term)
+  router.post('/api/memory/:key/clear-short-term', (req, res) => {
+    memoryService.clearShortTerm(req.params.key);
+    res.json({ success: true });
+  });
+
   // Start auto-update on boot if enabled
   setTimeout(() => { try { startAutoUpdate(); } catch (e) {} }, 2000);
 

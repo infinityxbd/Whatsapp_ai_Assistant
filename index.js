@@ -99,6 +99,12 @@ async function main() {
   //      (e.g. a browser crash the auto-reconnect could not recover).
   //   2. The bot claims to be online but the browser page is actually
   //      unresponsive (silent freeze — no message events anymore).
+  // ─── User Memory System: prune inactive profiles daily ───
+  setInterval(() => {
+    try { require('./src/memory/service').prune(); } catch (e) {}
+  }, 24 * 60 * 60 * 1000);
+  console.log('🧠 User Memory System active (daily prune enabled)');
+
   setInterval(async () => {
     try {
       if (botState.status !== 'online') {

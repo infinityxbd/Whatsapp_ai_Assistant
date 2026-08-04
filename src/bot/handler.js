@@ -7,6 +7,7 @@ const aiService = require('../ai/service');
 const { readJSON } = require('../storage/store');
 const { handleCommand } = require('./commands');
 const { saveUnsent } = require('./unsent');
+const memoryService = require('../memory/service');
 
 const MAX_HISTORY = 7;
 const chatHistories = {};
@@ -279,14 +280,29 @@ async function handleMessage(message, client) {
       console.log(`💬 [${formatTime()}] ${isGroup ? 'Group' : 'Inbox'}: ${chatId}`);
       console.log(`📨 "${userMsg}"`);
 
+      // ─── User Memory System: identify user + build compact context ───
+      // Same user is remembered across inbox, groups and mentions because the
+      // memory key is the sender's phone (LID gets resolved to the real number).
+      const rawSender = isGroup ? (message.author || message.from) : message.from;
+      let userKey = memoryService.getUserKey(rawSender);
+      try {
+        if (String(rawSender).endsWith('@lid')) {
+          const { resolveLid } = require('./whatsapp');
+          const resolved = await resolveLid(rawSender);
+          if (resolved) userKey = memoryService.getUserKey(resolved);
+        }
+      } catch (e) {}
+      const memoryContext = memoryService.buildContext(userKey, chatId);
+
       if (isGroup) {
         await sleep(1000 + Math.random() * 1000);
         try { await client.sendSeen(chatId); } catch (e) {}
         addToHistory(chatId, 'user', userMsg);
         const history = getChatHistory(chatId);
-        const aiResponse = await aiService.generateReply(userMsg, history);
+        const aiResponse = await aiService.generateReply(userMsg, history, { memoryContext });
         console.log(`🤖 Reply: "${aiResponse}"`);
         addToHistory(chatId, 'model', aiResponse);
+        memoryService.updateFromExchange(userKey, rawSender, userMsg, aiResponse, { chatId, isGroup });
         await sendMessage(chatId, aiResponse, message, client);
         console.log(`✅ Sent to ${chatId}`);
       } else {
@@ -301,9 +317,10 @@ async function handleMessage(message, client) {
         await sleep(randomBetween(5, 10));
         addToHistory(chatId, 'user', userMsg);
         const history = getChatHistory(chatId);
-        const aiResponse = await aiService.generateReply(userMsg, history);
+        const aiResponse = await aiService.generateReply(userMsg, history, { memoryContext });
         console.log(`🤖 Reply: "${aiResponse}"`);
         addToHistory(chatId, 'model', aiResponse);
+        memoryService.updateFromExchange(userKey, rawSender, userMsg, aiResponse, { chatId, isGroup });
         try {
           await client.pupPage.evaluate((id) => {
             window.WWebJS.sendChatstate('stop', id);

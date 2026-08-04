@@ -95,6 +95,41 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
   const senderId = commandSenderId || message.from;
   console.log(`🔍 Command: "${body}" from ${senderId} (chat: ${message.from})`);
 
+  // ─── Public memory commands — work for ANY user (privacy rights) ───
+  const cmdLower = body.split(' ')[0].toLowerCase();
+  if (cmdLower === '/mymemory' || cmdLower === '/forgetme') {
+    const memoryService = require('../memory/service');
+    let memKey = memoryService.getUserKey(senderId);
+    if (String(senderId).endsWith('@lid')) {
+      try {
+        const { resolveLid } = require('./whatsapp');
+        const resolved = await resolveLid(senderId);
+        if (resolved) memKey = memoryService.getUserKey(resolved);
+      } catch (e) {}
+    }
+    if (cmdLower === '/forgetme') {
+      memoryService.deleteProfile(memKey);
+      console.log(`🧠 Memory deleted on user request: ${senderId} → key ${memKey}`);
+      await reply(message, '🗑️ *Tomar shob data delete kore deya hoise.*\n\nAmi tomar kono information ar rakhi na. Jodi abar kotha bolo, ami abar notun kore shikhbo. 😊', client);
+      return true;
+    }
+    const profile = memoryService.getProfile(memKey);
+    if (!profile) {
+      await reply(message, '🧠 *Amar tomar kono memory nei.*\n\nKono kichu rakhi nai — shudhu kotha bole thaki. 😊', client);
+      return true;
+    }
+    let txt = '🧠 *Tomar Memory (amar jana kotha):*\n\n';
+    txt += `👤 Name: ${profile.name || '—'}\n`;
+    txt += `🗣️ Language: ${profile.language === 'bn' ? 'Bangla' : profile.language === 'ar' ? 'Arabic' : profile.language === 'en' ? 'English' : '—'}\n`;
+    txt += `💬 Style: ${profile.style || '—'}\n`;
+    if (profile.interests.length) txt += `⭐ Interests: ${profile.interests.join(', ')}\n`;
+    if (profile.preferences.length) txt += `👍 Preferences: ${profile.preferences.join('; ')}\n`;
+    if (profile.facts.length) txt += `📌 Facts: ${profile.facts.join('; ')}\n`;
+    txt += `\n🗑️ *Shob muche dite:* /forgetme`;
+    await reply(message, txt, client);
+    return true;
+  }
+
   // Step 1: Try to resolve sender LID → phone
   let resolvedPhone = null;
   const senderClean = cleanId(senderId);
@@ -453,6 +488,20 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
 /clearin — Clear all inbox unsent
 /cleargp — Clear all group unsent
 
+*Memory System (admin):*
+/memory — Status
+/memory on|off — Global toggle
+/memlist — List users with memory
+/memview <number> — View memory
+/memedit <number> <field> <value> — Edit
+/memdel <number> — Delete memory
+/memoff <number> — Disable user memory
+/memon <number> — Enable user memory
+
+*Privacy (any user):*
+/mymemory — See what bot remembers about you
+/forgetme — Delete your stored data
+
 *Other:*
 /gplist — Group list
 /log <n> — Show last n logs
@@ -517,6 +566,118 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
         await reply(message, `❌ Update failed: ${e.message.substring(0, 200)}`, client);
         console.error('❌ /update failed:', e.message);
       }
+      return true;
+    }
+
+    // ─── User Memory System (admin) ───
+    case '/memory': {
+      const memoryService = require('../memory/service');
+      const paramLower = param.trim().toLowerCase();
+      if (paramLower === 'on') {
+        memoryService.setGlobalEnabled(true);
+        await reply(message, '🧠 Memory system: ✅ ON', client);
+        return true;
+      }
+      if (paramLower === 'off') {
+        memoryService.setGlobalEnabled(false);
+        await reply(message, '🧠 Memory system: ❌ OFF', client);
+        return true;
+      }
+      const users = memoryService.listProfiles();
+      const enabled = memoryService.isGloballyEnabled();
+      let txt = `🧠 *Memory System:* ${enabled ? '✅ ON' : '❌ OFF'}\n`;
+      txt += `👥 Users: ${users.length}\n\n`;
+      txt += `*Commands:*\n/memory on|off — global toggle\n/memlist — list users\n/memview <number> — view\n/memedit <number> <field> <value> — edit\n/memdel <number> — delete\n/memoff <number> — disable user\n/memon <number> — enable user`;
+      await reply(message, txt, client);
+      return true;
+    }
+    case '/memlist': {
+      const memoryService = require('../memory/service');
+      const users = memoryService.listProfiles();
+      if (users.length === 0) {
+        await reply(message, '🧠 Kono user memory nei (0 users).', client);
+        return true;
+      }
+      let txt = `🧠 *Users with memory (${users.length}):*\n\n`;
+      users.slice(0, 30).forEach((u, i) => {
+        const last = u.lastInteraction ? new Date(u.lastInteraction).toLocaleString() : '—';
+        txt += `${i + 1}. ${u.name || u.key}\n   📱 ${u.key} | ${u.memoryEnabled ? '✅' : '❌'} | ${u.totalMessages} msgs | ${last}\n\n`;
+      });
+      await reply(message, txt.substring(0, 1800), client);
+      return true;
+    }
+    case '/memview': {
+      const memoryService = require('../memory/service');
+      const key = memoryService.getUserKey(param);
+      const profile = memoryService.getProfile(key);
+      if (!profile) {
+        await reply(message, `🧠 Memory pai nai: ${param || '(no number)'}`, client);
+        return true;
+      }
+      let txt = `🧠 *Memory: ${profile.name || key}*\n`;
+      txt += `📱 Key: ${key}\n`;
+      txt += `🗣️ Language: ${profile.language || '—'} | 💬 Style: ${profile.style || '—'}\n`;
+      if (profile.interests.length) txt += `⭐ Interests: ${profile.interests.join(', ')}\n`;
+      if (profile.preferences.length) txt += `👍 Preferences: ${profile.preferences.join('; ')}\n`;
+      if (profile.facts.length) txt += `📌 Facts: ${profile.facts.join('; ')}\n`;
+      if (profile.notes) txt += `📝 Notes: ${profile.notes}\n`;
+      txt += `📅 Last: ${profile.lastInteraction ? new Date(profile.lastInteraction).toLocaleString() : '—'}`;
+      await reply(message, txt.substring(0, 1800), client);
+      return true;
+    }
+    case '/memdel': {
+      const memoryService = require('../memory/service');
+      const key = memoryService.getUserKey(param);
+      if (!key) { await reply(message, '❌ Usage: /memdel <number>', client); return true; }
+      memoryService.deleteProfile(key);
+      await reply(message, `🧹 Memory deleted for ${param}`, client);
+      return true;
+    }
+    case '/memoff':
+    case '/memon': {
+      const memoryService = require('../memory/service');
+      const key = memoryService.getUserKey(param);
+      if (!key) { await reply(message, `❌ Usage: ${cmd} <number>`, client); return true; }
+      memoryService.setUserEnabled(key, cmd === '/memon');
+      await reply(message, `🧠 Memory ${cmd === '/memon' ? 'ENABLED ✅' : 'DISABLED ❌'} for ${param}`, client);
+      return true;
+    }
+    case '/memedit': {
+      // /memedit <number> <field> <value...>
+      // fields: name, language, style, notes | interests(+/-), facts(+/-), preferences(+/-)
+      const memoryService = require('../memory/service');
+      const parts = param.split(' ').filter(Boolean);
+      if (parts.length < 3) {
+        await reply(message, '❌ Usage: /memedit <number> <field> <value>\nFields: name, language, style, notes, interests, facts, preferences\nList fields: interests+ cricket (add) | facts- something (remove)', client);
+        return true;
+      }
+      const key = memoryService.getUserKey(parts[0]);
+      const field = parts[1].toLowerCase();
+      const value = parts.slice(2).join(' ');
+      const baseField = field.replace(/[+-]$/, '');
+      const isListField = ['interests', 'facts', 'preferences'].includes(baseField);
+      if (isListField) {
+        const profile = memoryService.getOrCreateProfile(key, parts[0]);
+        const list = profile[baseField] || [];
+        if (field.endsWith('-')) {
+          profile[baseField] = list.filter(x => x.toLowerCase() !== value.toLowerCase());
+          await reply(message, `🧠 ${baseField} -= "${value}"`, client);
+        } else {
+          if (!list.some(x => x.toLowerCase() === value.toLowerCase())) {
+            list.push(value.slice(0, 80));
+            if (list.length > 10) list.shift();
+          }
+          await reply(message, `🧠 ${baseField} += "${value}"`, client);
+        }
+        memoryService.updateProfile(key, profile);
+        return true;
+      }
+      if (field === 'name') memoryService.updateProfile(key, { name: value });
+      else if (field === 'language') memoryService.updateProfile(key, { language: value });
+      else if (field === 'style') memoryService.updateProfile(key, { style: value });
+      else if (field === 'notes') memoryService.updateProfile(key, { notes: value });
+      else { await reply(message, `❌ Unknown field: ${field}`, client); return true; }
+      await reply(message, `🧠 ${field} updated for ${parts[0]}`, client);
       return true;
     }
 

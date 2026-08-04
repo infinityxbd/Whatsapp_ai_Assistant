@@ -75,7 +75,15 @@ function updateAPIStats(apiId, success, responseTime, error) {
 }
 
 class AIService {
-  async generateReply(userMessage, conversationHistory = []) {
+  /**
+   * Generate a reply.
+   * @param {string} userMessage
+   * @param {Array}  conversationHistory  recent chat messages (short-term)
+   * @param {Object} [options]            { memoryContext } — compact user
+   *                                      memory prompt injected into the
+   *                                      system prompt (token-optimized).
+   */
+  async generateReply(userMessage, conversationHistory = [], options = {}) {
     const activeAPIs = loadAPIs();
 
     if (activeAPIs.length === 0) {
@@ -85,6 +93,7 @@ class AIService {
 
     const config = readJSON('config.json') || {};
     const botPrompt = config.botPrompt || 'You are a helpful assistant.';
+    const memoryContext = (options && options.memoryContext) || '';
 
     for (const api of activeAPIs) {
       try {
@@ -95,9 +104,14 @@ class AIService {
         }
 
         const provider = createProvider(apiConfig);
-        if (!apiConfig.systemPrompt && botPrompt) {
-          provider.systemPrompt = botPrompt;
+        // Per-API system prompt wins; otherwise the global bot prompt. The
+        // user-memory context is always appended (if present) so the model
+        // can personalize replies without sending full conversation history.
+        let systemPrompt = apiConfig.systemPrompt || botPrompt;
+        if (memoryContext) {
+          systemPrompt += '\n\n' + memoryContext;
         }
+        provider.systemPrompt = systemPrompt;
 
         console.log(`🤖 Trying: ${api.name} (${api.providerType}/${api.model})`);
         const result = await provider.generateReply(userMessage, conversationHistory);

@@ -422,6 +422,9 @@
       <a class="nav-link" data-tab="aiapis" onclick="switchTab('aiapis', this)">
         <span class="icon">🔑</span><span>AI API Manager</span>
       </a>
+      <a class="nav-link" data-tab="memory" onclick="switchTab('memory', this)">
+        <span class="icon">🧠</span><span>User Memory</span>
+      </a>
       <a class="nav-link" data-tab="blocklist" onclick="switchTab('blocklist', this)">
         <span class="icon">🚫</span><span>Block List</span>
       </a>
@@ -542,6 +545,89 @@
       </div>
       <div id="aiApisList"></div>
       <div class="empty-state" id="aiApisEmpty">No AI APIs configured yet. Add your first API to get started.</div>
+    </div>
+
+    <!-- Tab: User Memory -->
+    <div class="tab" id="tab-memory">
+      <div class="section-header"><span class="icon">🧠</span> User Memory System</div>
+      <div class="info-banner">
+        Bot remembers each user across private chats, groups and mentions. Only summarized long-term info is stored — raw conversation history is never kept permanently. Users can request deletion with <b>/forgetme</b>.
+      </div>
+      <div class="toggle-card" style="border-color: rgba(37,211,102,0.3);">
+        <div class="toggle-info">
+          <div class="title">🧠 Memory System (Global)</div>
+          <div class="desc">ON = bot stores &amp; uses user memory &nbsp;|&nbsp; OFF = memory fully disabled, no data stored</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleMemoryGlobal" onchange="toggleGlobalMemory()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="header-row">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div style="font-size:15px;font-weight:600;">👥 Users with Memory <span class="badge badge-active" id="memoryUserCount">0</span></div>
+        </div>
+        <input type="text" id="memorySearch" placeholder="🔍 Search name or number..." oninput="renderMemoryUsers()" style="max-width:260px;">
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Language</th>
+              <th>Messages</th>
+              <th>Last Interaction</th>
+              <th>Memory</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="memoryUsersBody"></tbody>
+        </table>
+        <div class="empty-state" id="memoryEmpty">No user memory stored yet. When users chat with the bot, their profiles appear here.</div>
+      </div>
+    </div>
+
+    <!-- Modal: Memory Edit -->
+    <div class="modal-overlay" id="memoryModal">
+      <div class="modal" style="max-width:560px;max-height:90vh;overflow-y:auto;">
+        <h3>🧠 Edit User Memory <span id="memoryModalKey" style="font-size:12px;color:#8b949e;"></span></h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div><label>Name</label><input type="text" id="memName"></div>
+          <div><label>Language</label>
+            <select id="memLanguage" class="sel">
+              <option value="">Auto</option>
+              <option value="bn">Bangla</option>
+              <option value="en">English</option>
+              <option value="ar">Arabic</option>
+            </select>
+          </div>
+        </div>
+        <label>Conversation Style</label>
+        <input type="text" id="memStyle" placeholder="e.g. casual, uses emoji">
+        <label>Interests (one per line)</label>
+        <textarea id="memInterests" style="min-height:70px;font-size:13px;"></textarea>
+        <label>Preferences (one per line)</label>
+        <textarea id="memPreferences" style="min-height:70px;font-size:13px;"></textarea>
+        <label>Important Facts (one per line)</label>
+        <textarea id="memFacts" style="min-height:70px;font-size:13px;"></textarea>
+        <label>Admin Notes</label>
+        <textarea id="memNotes" style="min-height:50px;font-size:13px;"></textarea>
+        <div class="toggle-card" style="margin-top:14px;padding:14px 18px;">
+          <div class="toggle-info">
+            <div class="title">Memory enabled for this user</div>
+            <div class="desc">Disable to stop storing &amp; using this user's memory</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="memEnabled">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-danger" onclick="deleteMemory(currentMemoryKey)">🗑 Delete</button>
+          <button class="btn btn-outline" onclick="document.getElementById('memoryModal').classList.remove('show')">Cancel</button>
+          <button class="btn btn-primary" onclick="saveMemory(currentMemoryKey)">Save</button>
+        </div>
+      </div>
     </div>
 
     <!-- Tab: Block List -->
@@ -842,6 +928,7 @@
       if (tab === 'whatsapp') checkWhatsAppStatus();
       if (tab === 'adminusers') loadAdminUsers();
       if (tab === 'aiapis') loadAIApis();
+      if (tab === 'memory') loadMemory();
     }
 
     // Status polling
@@ -917,6 +1004,139 @@
       await fetch('/admin/api/admin-users/' + id, { method: 'DELETE', credentials: 'same-origin' });
       showToast('Admin user removed');
       loadAdminUsers();
+    }
+
+    // ─── User Memory System ───
+    let memoryData = { globalEnabled: true, users: [] };
+    let currentMemoryKey = null;
+
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async function loadMemory() {
+      try {
+        const res = await fetch('/admin/api/memory', { credentials: 'same-origin' });
+        memoryData = await res.json();
+        document.getElementById('toggleMemoryGlobal').checked = memoryData.globalEnabled;
+        renderMemoryUsers();
+      } catch(e) {}
+    }
+
+    function renderMemoryUsers() {
+      const body = document.getElementById('memoryUsersBody');
+      const empty = document.getElementById('memoryEmpty');
+      const query = (document.getElementById('memorySearch').value || '').toLowerCase().trim();
+      const users = memoryData.users.filter(u =>
+        !query || (u.name || '').toLowerCase().includes(query) || u.key.includes(query)
+      );
+      document.getElementById('memoryUserCount').textContent = memoryData.users.length;
+      if (users.length === 0) {
+        body.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      body.innerHTML = users.map(u => {
+        const last = u.lastInteraction ? new Date(u.lastInteraction).toLocaleString() : '—';
+        const lang = u.language === 'bn' ? 'Bangla' : u.language === 'en' ? 'English' : u.language === 'ar' ? 'Arabic' : (u.language || '—');
+        return `<tr>
+          <td><b>${escHtml(u.name || '—')}</b><br><small style="color:#8b949e">${escHtml(u.key)}</small></td>
+          <td>${escHtml(lang)}</td>
+          <td>${u.totalMessages || 0}</td>
+          <td>${escHtml(last)}</td>
+          <td>${u.memoryEnabled ? '<span class="badge badge-active">ON</span>' : '<span class="badge badge-disabled">OFF</span>'}</td>
+          <td style="text-align:right;white-space:nowrap;">
+            <button class="btn btn-outline btn-sm" onclick="openMemoryModal('${escHtml(u.key)}')">👁 View/Edit</button>
+            <button class="btn btn-sm ${u.memoryEnabled ? 'btn-danger' : 'btn-primary'}" onclick="toggleUserMemory('${escHtml(u.key)}')">${u.memoryEnabled ? 'Disable' : 'Enable'}</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function toggleGlobalMemory() {
+      const enabled = document.getElementById('toggleMemoryGlobal').checked;
+      try {
+        await fetch('/admin/api/memory/toggle', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        memoryData.globalEnabled = enabled;
+        showToast(enabled ? '🧠 Memory system ON' : '🧠 Memory system OFF');
+      } catch(e) { showToast('Failed to toggle memory', 'error'); loadMemory(); }
+    }
+
+    async function toggleUserMemory(key) {
+      const user = memoryData.users.find(u => u.key === key);
+      const enabled = !(user && user.memoryEnabled);
+      try {
+        await fetch('/admin/api/memory/' + encodeURIComponent(key) + '/toggle', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        showToast(enabled ? 'Memory enabled for ' + key : 'Memory disabled for ' + key);
+        loadMemory();
+      } catch(e) { showToast('Failed to toggle', 'error'); }
+    }
+
+    async function openMemoryModal(key) {
+      currentMemoryKey = key;
+      try {
+        const res = await fetch('/admin/api/memory/' + encodeURIComponent(key), { credentials: 'same-origin' });
+        const p = await res.json();
+        if (res.status === 404) { showToast('No memory found', 'error'); return; }
+        document.getElementById('memoryModalKey').textContent = '— ' + key;
+        document.getElementById('memName').value = p.name || '';
+        document.getElementById('memLanguage').value = p.language || '';
+        document.getElementById('memStyle').value = p.style || '';
+        document.getElementById('memInterests').value = (p.interests || []).join('\n');
+        document.getElementById('memPreferences').value = (p.preferences || []).join('\n');
+        document.getElementById('memFacts').value = (p.facts || []).join('\n');
+        document.getElementById('memNotes').value = p.notes || '';
+        document.getElementById('memEnabled').checked = p.memoryEnabled !== false;
+        document.getElementById('memoryModal').classList.add('show');
+      } catch(e) { showToast('Failed to load memory', 'error'); }
+    }
+
+    async function saveMemory(key) {
+      const splitLines = (val) => val.split('\n').map(s => s.trim()).filter(Boolean);
+      const payload = {
+        name: document.getElementById('memName').value.trim(),
+        language: document.getElementById('memLanguage').value,
+        style: document.getElementById('memStyle').value.trim(),
+        interests: splitLines(document.getElementById('memInterests').value),
+        preferences: splitLines(document.getElementById('memPreferences').value),
+        facts: splitLines(document.getElementById('memFacts').value),
+        notes: document.getElementById('memNotes').value.trim(),
+        memoryEnabled: document.getElementById('memEnabled').checked
+      };
+      try {
+        const res = await fetch('/admin/api/memory/' + encodeURIComponent(key), {
+          method: 'PUT', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Memory saved!');
+          document.getElementById('memoryModal').classList.remove('show');
+          loadMemory();
+        } else {
+          showToast(data.error || 'Save failed', 'error');
+        }
+      } catch(e) { showToast('Failed to save memory', 'error'); }
+    }
+
+    async function deleteMemory(key) {
+      if (!confirm('Delete ALL memory for this user? This cannot be undone.')) return;
+      try {
+        await fetch('/admin/api/memory/' + encodeURIComponent(key), { method: 'DELETE', credentials: 'same-origin' });
+        showToast('Memory deleted');
+        document.getElementById('memoryModal').classList.remove('show');
+        loadMemory();
+      } catch(e) { showToast('Failed to delete', 'error'); }
     }
 
     // WhatsApp Login
