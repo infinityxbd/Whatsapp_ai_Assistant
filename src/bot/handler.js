@@ -286,7 +286,22 @@ async function handleMessage(message, client) {
         })();
 
         addToHistory(chatId, 'user', userMsg);
+
+        // Identity self-references ("Ami Nahid naki?" = "Am I Nahid?",
+        // "Ami Nahid na" = "I'm not Nahid") are always treated as addressed
+        // in EVERY group mode (chatty, normal, mention) — the user is talking
+        // about themselves with the bot's name, not to another person, so
+        // these messages can never be skipped. isBotAddressed handles this
+        // via its first-person self-reference branch.
+        const selfRefIdentity = gIntel.isSelfReferenceIdentity(userMsg, config);
         const addressed = await gIntel.isBotAddressed(message, client, botState, config);
+
+        // Remember the correction so later conversations don't mix up who is
+        // who ("Ami Nahid na" → fact: user is not the bot).
+        if (selfRefIdentity) {
+          const botName = String((config && config.botName) || '').trim() || 'the bot';
+          memoryService.addFact(userKey, `Identity: user is not ${botName} (first-person clarification)`, rawSender);
+        }
 
         // Emoji-only messages: react sometimes, never spam a reply
         if (isEmojiOnly(userMsg)) {

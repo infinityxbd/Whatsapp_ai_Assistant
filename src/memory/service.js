@@ -414,6 +414,27 @@ function updateFromExchange(key, rawId, userMsg, aiResponse, meta = {}) {
 }
 
 /**
+ * Add a single fact to a user's long-term memory (deduped + capped).
+ * Used for explicit statements worth remembering — e.g. identity corrections
+ * like "Ami Nahid na" ("I'm not Nahid") so the bot never mixes the user up
+ * with itself in later conversations.
+ */
+function addFact(key, text, rawId) {
+  try {
+    const data = load();
+    if (data.globalEnabled === false) return;
+    if (!key || isSensitive(text)) return;
+    const existing = getProfile(key);
+    if (existing && existing.memoryEnabled === false) return;
+    const p = existing || createProfile(key, rawId || '');
+    addUnique(p.facts, truncate(text, ITEM_MAX_LEN));
+    scheduleSave();
+  } catch (e) {
+    console.error('❌ Memory addFact failed:', e.message);
+  }
+}
+
+/**
  * Maintenance: drop short-term of inactive users and remove long-term
  * profiles that have been silent for INACTIVE_PRUNE_DAYS.
  */
@@ -451,6 +472,7 @@ module.exports = {
   clearShortTerm,
   buildContext,
   updateFromExchange,
+  addFact,
   prune,
   isSensitive,
   LIMITS: { SHORT_TERM_MAX, CONTEXT_MAX_CHARS, LIST_CAP }

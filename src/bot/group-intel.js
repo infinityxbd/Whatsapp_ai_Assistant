@@ -127,6 +127,17 @@ function resetGroupSettings(chatId, config) {
 const QUESTION_BANGLA_RE = /\b(ki|keno|kivabe|kemne|kon|kothay|koto|kar|kokhon|kobe|ken)\b/i;
 const QUESTION_EN_RE = /\b(why|what|how|where|when|who|which)\b/i;
 
+// First-person / self-reference markers (Bangla, Banglish and English).
+// When the bot's name appears together with one of these, the speaker is
+// talking about THEMSELVES — an identity question or correction like
+// "Ami Nahid naki?", "Ami ki Nahid?", "Ami Nahid na", "Amake Nahid vabcho?"
+// ("Am I Nahid?", "I'm not Nahid", "Do you think I'm Nahid?"). Those must
+// be treated as addressed: the user IS talking to the bot, not to another
+// person, so a reply is always required and never skipped.
+// NOTE: explicit character-class boundaries are used instead of \b because
+// \b is ASCII-only and would never match the Bangla pronouns.
+const SELF_REF_RE = /(?:^|[\s,.;:!?।"'])(ami|amake|amar|amra|amader|nijer|আমি|আমাকে|আমার|আমরা|আমাদের|i|me|my|mine|myself|we|our|ours)(?=$|[\s,.;:!?।"'])/i;
+
 function isQuestion(text) {
   const t = String(text || '');
   if (/[?？]/.test(t)) return true;
@@ -164,9 +175,29 @@ function shouldRandomReply(chatId, config, userMsg) {
   return Math.random() < Math.min(chance, 1);
 }
 
+// Word-boundary aware regex for the bot's name in text ("Rafi,", "@Rafi", "Rafi!").
+function buildBotNameRe(botName) {
+  const name = String(botName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('(?:^|\\s|@)' + name + '(?=\\s|[,.;:!?]|$)', 'i');
+}
+
+// True when the message uses the bot's name about the SENDER in first person
+// — a self-correction / identity question like "Ami Nahid naki?", "Ami ki
+// Nahid?", "Ami Nahid na", "Amake Nahid vabcho?" ("Am I Nahid?", "I'm not
+// Nahid", "Do you think I'm Nahid?"). These are easily mistaken for a
+// third-person mention — as if the user is talking to someone else — but they
+// are clearly directed at the bot.
+function isSelfReferenceIdentity(body, config) {
+  const botName = String((config && config.botName) || '').trim();
+  if (botName.length <= 1) return false;
+  const nameRe = buildBotNameRe(botName);
+  const text = String(body || '');
+  return nameRe.test(text) && SELF_REF_RE.test(text);
+}
+
 // True when this message is clearly directed at the bot: it is @mentioned,
 // the bot's name is used, or the message is a reply to one of the bot's own
-// messages. These ALWAYS get a reply (bypass cooldown + chance).
+// messages. These ALWAYS get a reply (bypass cooldown + chance + group mode).
 async function isBotAddressed(message, client, botState, config) {
   try {
     // 1) Explicit mention (@tag of the bot's number/LID)
@@ -182,9 +213,19 @@ async function isBotAddressed(message, client, botState, config) {
     const cfg = config || readJSON('config.json') || {};
     const botName = String(cfg.botName || '').trim();
     if (botName.length > 1) {
-      const name = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const nameRe = new RegExp('(?:^|\\s|@)' + name + '(?=\\s|[,.;:!?]|$)', 'i');
-      if (nameRe.test(String(message.body || ''))) return true;
+      const nameRe = buildBotNameRe(botName);
+      const body = String(message.body || '');
+
+      // 2a) First-person self-reference with the bot's name — always addressed.
+      // Checked first so this guarantee can never be lost if the generic name
+      // check (2b) is later tightened.
+      if (isSelfReferenceIdentity(body, cfg)) {
+        console.log(`👤 Self-reference identity message (always addressed): "${body}"`);
+        return true;
+      }
+
+      // 2b) Any other use of the bot's name → clearly addressed
+      if (nameRe.test(body)) return true;
     }
 
     // 3) Reply to one of the bot's own messages
@@ -206,7 +247,7 @@ function buildGroupPrompt(config) {
   const botName = (config.botName || 'AI Assistant').trim();
   const custom = (config.groupPrompt || '').trim();
   const header = `You are "${botName}", chatting in a WhatsApp group.`;
-  const rules = 'Rules: reply like a real person — keep it SHORT (1-2 sentences max), casual and natural. No bullet points, no lists, no headings, no over-explaining. Never mention that you are an AI, a bot or an assistant. Use a friendly mix of Bangla/Banglish and English, with an occasional emoji. Join conversations like a friend — react to jokes, give quick opinions, ask questions sometimes.';
+  const rules = `Rules: reply like a real person — keep it SHORT (1-2 sentences max), casual and natural. No bullet points, no lists, no headings, no over-explaining. Never mention that you are an AI, a bot or an assistant. Use a friendly mix of Bangla/Banglish and English, with an occasional emoji. Join conversations like a friend — react to jokes, give quick opinions, ask questions sometimes. When someone uses your name about THEMSELVES in first person ("Ami ${botName} naki?", "Ami ki ${botName}?", "Ami ${botName} na", "Amake ${botName} vabcho?") they are talking to YOU and want to clear up an identity mix-up — reply briefly and playfully, never treat your own name in a first-person question as if it were another person.`;
   if (custom) {
     return `${header}\n\n${custom}\n\n${rules}`;
   }
@@ -236,6 +277,7 @@ module.exports = {
   resetGroupSettings,
   isQuestion,
   shouldRandomReply,
+  isSelfReferenceIdentity,
   isBotAddressed,
   buildGroupPrompt,
   trimToNatural
