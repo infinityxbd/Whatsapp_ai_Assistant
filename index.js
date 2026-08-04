@@ -36,7 +36,15 @@ async function initDataFiles() {
       replyToInbox: true,
       replyToGroups: false,
       botName: 'AI Assistant',
-      botEnabled: true
+      botEnabled: true,
+      // Group Conversation Intelligence defaults
+      groupPrompt: '',
+      groupReplyChance: 0.25,
+      groupCooldownSec: 45,
+      reactionsEnabled: true,
+      reactionChance: 0.12,
+      questionBoostChance: 0.6,
+      groupSettings: {}
     };
     writeJSON('config.json', config);
     console.log('📁 Created default config.json');

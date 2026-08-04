@@ -512,6 +512,65 @@
           <span class="toggle-slider"></span>
         </label>
       </div>
+
+      <!-- Group Conversation Intelligence -->
+      <div style="border-top:1px solid rgba(37,211,102,0.12);padding-top:24px;margin-bottom:24px;">
+        <div class="section-header" style="font-size:17px;"><span class="icon">🧠</span> Group Conversation Intelligence</div>
+        <div class="info-banner">
+          The bot acts like a natural group member: it always answers when <b>@mentioned</b>, named, or replied-to, and otherwise <b>randomly joins</b> conversations. It never replies to filler messages ("ok", "ha"), respects a cooldown, and can react with emojis instead of typing.
+        </div>
+        <div class="card" style="max-width:700px;">
+          <div class="toggle-card" style="padding:14px 18px;">
+            <div class="toggle-info">
+              <div class="title">😀 Emoji Reactions</div>
+              <div class="desc">React to messages with emoji instead of a full reply</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleReactions" onchange="saveReplySettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+            <div>
+              <label>Random Reply Chance (0–1)</label>
+              <input type="number" id="groupReplyChance" min="0" max="1" step="0.05" value="0.25">
+              <div class="helper">0 = mention-only &nbsp;|&nbsp; 1 = reply to everything</div>
+            </div>
+            <div>
+              <label>Question Boost (0–1)</label>
+              <input type="number" id="questionBoostChance" min="0" max="1" step="0.05" value="0.6">
+              <div class="helper">Reply chance when a message is a question (?)</div>
+            </div>
+            <div>
+              <label>Cooldown Between Replies (sec)</label>
+              <input type="number" id="groupCooldownSec" min="0" step="5" value="45">
+              <div class="helper">Time the bot stays quiet after its own message</div>
+            </div>
+          </div>
+          <label>Group Personality Prompt</label>
+          <textarea id="groupPrompt" placeholder="Leave empty for the default friendly-member persona. e.g. You are a funny Bengali friend who talks in Banglish..."></textarea>
+          <div class="helper" style="margin-bottom:8px;">Overrides the global AI prompt inside groups. The bot name is injected automatically. Replies are always kept short (1-2 sentences).</div>
+          <button class="btn btn-primary btn-full" onclick="saveReplySettings()">Save Group Intelligence</button>
+
+          <div style="border-top:1px solid rgba(255,255,255,0.08);margin-top:20px;padding-top:16px;">
+            <h3 style="margin-bottom:12px;">👥 Per-Group Modes <span class="badge badge-active" id="groupModesCount">0</span></h3>
+            <div class="input-row">
+              <select id="groupModeSelect" class="sel" style="flex:1;">
+                <option value="">— Select a group —</option>
+              </select>
+              <select id="groupModeValue" class="sel" style="max-width:140px;">
+                <option value="normal">⚖️ Normal</option>
+                <option value="chatty">💬 Chatty</option>
+                <option value="mention">🔇 Mention-only</option>
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="saveGroupMode()">Apply</button>
+            </div>
+            <div id="groupModesList"></div>
+            <div class="empty-state" id="groupModesEmpty" style="padding:16px;">No per-group settings. All groups follow the global rules above.</div>
+          </div>
+        </div>
+      </div>
+
       <div style="border-top:1px solid rgba(37,211,102,0.12);padding-top:24px;">
         <div class="section-header" style="font-size:17px;"><span class="icon">📨</span> Fallback Messages</div>
         <div class="info-banner">
@@ -1393,6 +1452,9 @@
     }
 
     // Settings
+    let groupSettingsData = {};
+    let allGroups = [];
+
     async function loadSettings() {
       try {
         const res = await fetch('/admin/api/settings', { credentials: 'same-origin' });
@@ -1401,7 +1463,15 @@
         document.getElementById('botPrompt').value = data.botPrompt || '';
         document.getElementById('toggleInbox').checked = data.replyToInbox;
         document.getElementById('toggleGroups').checked = data.replyToGroups;
+        document.getElementById('toggleReactions').checked = data.reactionsEnabled !== false;
+        document.getElementById('groupReplyChance').value = data.groupReplyChance || 0.25;
+        document.getElementById('questionBoostChance').value = data.questionBoostChance || 0.6;
+        document.getElementById('groupCooldownSec').value = data.groupCooldownSec || 45;
+        document.getElementById('groupPrompt').value = data.groupPrompt || '';
         document.getElementById('botNameSidebar').textContent = data.botName || 'AI Assistant';
+        groupSettingsData = data.groupSettings || {};
+        renderGroupModes();
+        loadGroups();
       } catch(e) {}
     }
 
@@ -1429,11 +1499,108 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             replyToInbox: document.getElementById('toggleInbox').checked,
-            replyToGroups: document.getElementById('toggleGroups').checked
+            replyToGroups: document.getElementById('toggleGroups').checked,
+            reactionsEnabled: document.getElementById('toggleReactions').checked,
+            groupReplyChance: parseFloat(document.getElementById('groupReplyChance').value) || 0,
+            questionBoostChance: parseFloat(document.getElementById('questionBoostChance').value) || 0,
+            groupCooldownSec: parseInt(document.getElementById('groupCooldownSec').value) || 0,
+            groupPrompt: document.getElementById('groupPrompt').value,
+            groupSettings: groupSettingsData
           })
         });
         showToast('Reply settings updated!');
       } catch(e) { showToast('Failed to update', 'error'); }
+    }
+
+    // ─── Per-Group Modes ───
+    function renderGroupModes() {
+      const list = document.getElementById('groupModesList');
+      const empty = document.getElementById('groupModesEmpty');
+      const entries = Object.entries(groupSettingsData || {});
+      document.getElementById('groupModesCount').textContent = entries.length;
+      if (entries.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      list.innerHTML = entries.map(([id, s]) => {
+        const g = allGroups.find(x => String(x.id).replace(/\D/g, '') === id);
+        const name = g ? g.name : id;
+        const modeTxt = s.mode === 'chatty' ? '💬 Chatty' : s.mode === 'mention' ? '🔇 Mention-only' : '⚖️ Normal';
+        const chanceTxt = typeof s.chance === 'number' ? ` · ${Math.round(s.chance * 100)}%` : '';
+        return `<div class="contact-item">
+          <div class="contact-info">
+            <div class="contact-name">${escHtml(name)}</div>
+            <div class="contact-number">${modeTxt}${chanceTxt} · ${escHtml(id)}</div>
+          </div>
+          <div class="contact-actions">
+            <select class="sel" style="max-width:130px;padding:6px 10px;font-size:12px;" onchange="changeGroupMode('${escHtml(id)}', this.value)">
+              <option value="normal" ${s.mode === 'normal' ? 'selected' : ''}>⚖️ Normal</option>
+              <option value="chatty" ${s.mode === 'chatty' ? 'selected' : ''}>💬 Chatty</option>
+              <option value="mention" ${s.mode === 'mention' ? 'selected' : ''}>🔇 Mention</option>
+            </select>
+            <button class="btn btn-danger btn-sm" onclick="removeGroupMode('${escHtml(id)}')">✕</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function loadGroups() {
+      try {
+        const res = await fetch('/admin/api/groups', { credentials: 'same-origin' });
+        allGroups = await res.json();
+        const sel = document.getElementById('groupModeSelect');
+        sel.innerHTML = '<option value="">— Select a group —</option>' + allGroups.map(g => {
+          const id = String(g.id).replace(/\D/g, '');
+          return `<option value="${escHtml(id)}">${escHtml(g.name)} (${id})</option>`;
+        }).join('');
+        renderGroupModes(); // refresh names now that we know the groups
+      } catch(e) {}
+    }
+
+    async function saveGroupMode() {
+      const id = document.getElementById('groupModeSelect').value;
+      const mode = document.getElementById('groupModeValue').value;
+      if (!id) return showToast('Select a group first', 'error');
+      try {
+        const res = await fetch('/admin/api/groups/' + id + '/mode', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode })
+        });
+        const data = await res.json();
+        groupSettingsData = data.settings || {};
+        renderGroupModes();
+        showToast('Group mode saved!');
+      } catch(e) { showToast('Failed to save group mode', 'error'); }
+    }
+
+    async function changeGroupMode(id, mode) {
+      try {
+        const res = await fetch('/admin/api/groups/' + id + '/mode', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode })
+        });
+        groupSettingsData = (await res.json()).settings || {};
+        renderGroupModes();
+      } catch(e) {}
+    }
+
+    async function removeGroupMode(id) {
+      try {
+        const res = await fetch('/admin/api/groups/' + id + '/mode', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'normal', reset: true })
+        });
+        const data = await res.json();
+        // backend treats reset via deleting entry — re-fetch clean state
+        groupSettingsData = data.settings || {};
+        renderGroupModes();
+        showToast('Group mode removed');
+      } catch(e) { showToast('Failed to remove', 'error'); }
     }
 
     // Blocklist

@@ -104,10 +104,12 @@ class AIService {
         }
 
         const provider = createProvider(apiConfig);
-        // Per-API system prompt wins; otherwise the global bot prompt. The
-        // user-memory context is always appended (if present) so the model
-        // can personalize replies without sending full conversation history.
-        let systemPrompt = apiConfig.systemPrompt || botPrompt;
+        // Precedence: per-API prompt > per-message override (e.g. the group
+        // personality prompt) > global bot prompt. The user-memory context is
+        // always appended (if present) so the model can personalize replies
+        // without sending full conversation history.
+        const overridePrompt = (options && options.systemPrompt) || '';
+        let systemPrompt = apiConfig.systemPrompt || overridePrompt || botPrompt;
         if (memoryContext) {
           systemPrompt += '\n\n' + memoryContext;
         }

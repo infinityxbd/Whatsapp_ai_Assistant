@@ -275,8 +275,6 @@ async function handleMessage(message, client) {
       const chatId = message.from;
       const userMsg = message.body;
 
-       if (isGroup && isEmojiOnly(userMsg)) return;
-
       console.log(`💬 [${formatTime()}] ${isGroup ? 'Group' : 'Inbox'}: ${chatId}`);
       console.log(`📨 "${userMsg}"`);
 
@@ -295,14 +293,65 @@ async function handleMessage(message, client) {
       const memoryContext = memoryService.buildContext(userKey, chatId);
 
       if (isGroup) {
-        await sleep(1000 + Math.random() * 1000);
-        try { await client.sendSeen(chatId); } catch (e) {}
+        // ─── Group Conversation Intelligence ───
+        // The bot listens to every message (context + memory), but only
+        // replies when addressed (@mention / named / reply-to) or when it
+        // randomly joins a conversation. Everything else may get a reaction.
+        const gIntel = require('./group-intel');
+        // Reaction chance (0 = disabled, null/undefined = default 0.12)
+        const reactionChance = (() => {
+          const rc = parseFloat(config.reactionChance);
+          return isNaN(rc) ? 0.12 : Math.min(Math.max(rc, 0), 1);
+        })();
+
         addToHistory(chatId, 'user', userMsg);
+        const addressed = await gIntel.isBotAddressed(message, client, botState, config);
+
+        // Emoji-only messages: react sometimes, never spam a reply
+        if (isEmojiOnly(userMsg)) {
+          if ((config.reactionsEnabled !== false) && Math.random() < reactionChance) {
+            try { await message.react(gIntel.pickReactionEmoji(userMsg)); } catch (e) {}
+          }
+          memoryService.updateFromExchange(userKey, rawSender, userMsg, null, { chatId, isGroup });
+          return;
+        }
+
+        // Not addressed → only join if content is worth it AND chance allows
+        if (!addressed && (gIntel.isLowContent(userMsg) || !gIntel.shouldRandomReply(chatId, config, userMsg))) {
+          if ((config.reactionsEnabled !== false) && Math.random() < reactionChance) {
+            try { await message.react(gIntel.pickReactionEmoji(userMsg)); } catch (e) {}
+          }
+          memoryService.updateFromExchange(userKey, rawSender, userMsg, null, { chatId, isGroup });
+          return;
+        }
+
+        gIntel.markReplied(chatId);
+        console.log(`👥 Group reply (${addressed ? 'addressed' : 'joined conversation'}): ${chatId}`);
+
+        // Natural human pacing: read the message, then "type" the reply
+        await sleep(gIntel.naturalDelay(userMsg, true));
+        try { await client.sendSeen(chatId); } catch (e) {}
+        try {
+          await client.pupPage.evaluate((id) => {
+            window.WWebJS.sendChatstate('typing', id);
+            return true;
+          }, chatId);
+        } catch (e) {}
+        await sleep(600 + Math.random() * 1200);
+
         const history = getChatHistory(chatId);
-        const aiResponse = await aiService.generateReply(userMsg, history, { memoryContext });
+        const groupSystemPrompt = gIntel.buildGroupPrompt(config);
+        let aiResponse = await aiService.generateReply(userMsg, history, { memoryContext, systemPrompt: groupSystemPrompt });
+        aiResponse = gIntel.trimToNatural(aiResponse); // keep group replies short & human
         console.log(`🤖 Reply: "${aiResponse}"`);
         addToHistory(chatId, 'model', aiResponse);
         memoryService.updateFromExchange(userKey, rawSender, userMsg, aiResponse, { chatId, isGroup });
+        try {
+          await client.pupPage.evaluate((id) => {
+            window.WWebJS.sendChatstate('stop', id);
+            return true;
+          }, chatId);
+        } catch (e) {}
         await sendMessage(chatId, aiResponse, message, client);
         console.log(`✅ Sent to ${chatId}`);
       } else {

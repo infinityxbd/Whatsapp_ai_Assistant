@@ -502,6 +502,17 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
 /mymemory — See what bot remembers about you
 /forgetme — Delete your stored data
 
+*Group Intelligence:*
+/groupmode — Group behavior settings
+/groupprompt <text> — Group personality prompt
+/groupprompt reset — Default persona
+/groupchance <0-1> — Global reply chance
+/group <id> chatty|normal|mention — Per-group mode
+/groupchance <id> <0-1> — Per-group chance
+/groupreset <id> — Remove per-group settings
+/grouplist — Configured groups
+/reaction on|off — Emoji reactions
+
 *Other:*
 /gplist — Group list
 /log <n> — Show last n logs
@@ -536,6 +547,121 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       setConfig('botPrompt', param);
       console.log(`📝 AI Prompt updated via command`);
       await reply(message, `✅ AI Personality Prompt updated!\n\n*New:*\n${param.substring(0, 200)}${param.length > 200 ? '...' : ''}`, client);
+      return true;
+    }
+
+    // ─── Group Conversation Intelligence ───
+    case '/groupmode': {
+      const config = readJSON('config.json') || {};
+      const chance = parseFloat(config.groupReplyChance) || 0.25;
+      const cooldown = parseInt(config.groupCooldownSec) || 45;
+      const reactions = config.reactionsEnabled !== false;
+      const questionBoost = parseFloat(config.questionBoostChance) || 0.6;
+      const customGroups = Object.keys(config.groupSettings || {}).length;
+      let txt = `🧠 *Group Intelligence*\n\n`;
+      txt += `Random reply chance: ${Math.round(chance * 100)}%\n`;
+      txt += `Question boost: ${Math.round(questionBoost * 100)}%\n`;
+      txt += `Cooldown: ${cooldown}s\n`;
+      txt += `Reactions: ${reactions ? '✅ ON' : '❌ OFF'}\n`;
+      txt += `Group prompt: ${(config.groupPrompt || '').trim() ? 'custom ✅' : 'default persona'}\n`;
+      txt += `Per-group settings: ${customGroups} group${customGroups === 1 ? '' : 's'}\n\n`;
+      txt += `*Commands:*\n/groupprompt <text> — group personality\n/groupprompt reset — default persona\n/groupchance <0-1> — global chance\n/group <id> chatty|normal|mention — per-group mode\n/groupchance <id> <0-1> — per-group chance\n/groupreset <id> — remove per-group settings\n/grouplist — configured groups\n/reaction on|off — emoji reactions`;
+      await reply(message, txt, client);
+      return true;
+    }
+    case '/group': {
+      // /group <groupId> <chatty|normal|mention>
+      const gIntel = require('./group-intel');
+      const config = readJSON('config.json') || {};
+      const parts = param.trim().split(/\s+/).filter(Boolean);
+      if (parts.length < 2 || !['chatty', 'normal', 'mention'].includes(parts[1].toLowerCase())) {
+        await reply(message, '❌ Usage: /group <groupId> <chatty|normal|mention>\n(Group ID pawa jabe /gplist diye)', client);
+        return true;
+      }
+      const mode = parts[1].toLowerCase();
+      config.groupSettings = gIntel.setGroupMode(parts[0], mode, config);
+      writeJSON('config.json', config);
+      const label = mode === 'chatty' ? '💬 Chatty (high participation)' : mode === 'mention' ? '🔇 Mention-only' : '⚖️ Normal (hybrid)';
+      await reply(message, `✅ Group mode set: ${label}\n(ID: ${gIntel.cleanGroupId(parts[0])})`, client);
+      return true;
+    }
+    case '/groupreset': {
+      const gIntel = require('./group-intel');
+      const config = readJSON('config.json') || {};
+      if (!param.trim()) { await reply(message, '❌ Usage: /groupreset <groupId>', client); return true; }
+      config.groupSettings = gIntel.resetGroupSettings(param.trim(), config);
+      writeJSON('config.json', config);
+      await reply(message, `🧹 Per-group settings removed for ${param.trim()}. Bot ekhon global rules follow korbe.`, client);
+      return true;
+    }
+    case '/grouplist': {
+      const gIntel = require('./group-intel');
+      const config = readJSON('config.json') || {};
+      const gs = config.groupSettings || {};
+      const keys = Object.keys(gs);
+      if (keys.length === 0) {
+        await reply(message, '🧠 Kono per-group setting nei. Sob group global rules follow kore.\nSet korte: /group <groupId> <mode>', client);
+        return true;
+      }
+      let txt = `🧠 *Configured Groups (${keys.length}):*\n\n`;
+      for (const [id, s] of Object.entries(gs)) {
+        const chanceTxt = typeof s.chance === 'number' ? ` | chance ${Math.round(s.chance * 100)}%` : '';
+        const modeTxt = s.mode === 'chatty' ? '💬 chatty' : s.mode === 'mention' ? '🔇 mention' : '⚖️ normal';
+        txt += `• ${id} → ${modeTxt}${chanceTxt}\n`;
+      }
+      txt += `\nRemove: /groupreset <id>`;
+      await reply(message, txt.substring(0, 1800), client);
+      return true;
+    }
+    case '/groupchance': {
+      const gIntel = require('./group-intel');
+      const config = readJSON('config.json') || {};
+      const parts = param.trim().split(/\s+/).filter(Boolean);
+      // per-group: /groupchance <groupId> <0-1>   |   global: /groupchance <0-1>
+      const isPerGroup = parts.length >= 2 && /\d/.test(parts[0]);
+      const valIdx = isPerGroup ? 1 : 0;
+      const val = parseFloat(parts[valIdx]);
+      if (isNaN(val) || val < 0 || val > 1) {
+        await reply(message, '❌ Usage: /groupchance <0-1> (global)\n/groupchance <groupId> <0-1> (per-group)', client);
+        return true;
+      }
+      if (isPerGroup) {
+        config.groupSettings = gIntel.setGroupChance(parts[0], val, config);
+        writeJSON('config.json', config);
+        await reply(message, `✅ Per-group chance: ${gIntel.cleanGroupId(parts[0])} → ${Math.round(val * 100)}%`, client);
+      } else {
+        setConfig('groupReplyChance', val);
+        await reply(message, `✅ Global random group reply chance: ${Math.round(val * 100)}%`, client);
+      }
+      return true;
+    }
+    case '/groupprompt': {
+      const config = readJSON('config.json') || {};
+      if (!param || param.toLowerCase() === 'reset') {
+        const current = config.groupPrompt ? '\n\n*Current:*\n' + config.groupPrompt.substring(0, 300) : '';
+        await reply(message, `📝 *Group Personality Prompt*${current}\n\nUse: /groupprompt <text> — set it\n/groupprompt reset — default friendly persona`, client);
+        return true;
+      }
+      setConfig('groupPrompt', param);
+      console.log('🧠 Group prompt updated via command');
+      await reply(message, `✅ Group personality prompt updated!\n\n*New:*\n${param.substring(0, 200)}${param.length > 200 ? '...' : ''}`, client);
+      return true;
+    }
+    case '/groupchance': {
+      const val = parseFloat(param);
+      if (isNaN(val) || val < 0 || val > 1) {
+        await reply(message, '❌ Usage: /groupchance <0-1>\nExample: /groupchance 0.3 (30% random replies)', client);
+        return true;
+      }
+      setConfig('groupReplyChance', val);
+      await reply(message, `✅ Random group reply chance: ${Math.round(val * 100)}%`, client);
+      return true;
+    }
+    case '/reaction': {
+      const mode = param.trim().toLowerCase();
+      if (mode === 'on') { setConfig('reactionsEnabled', true); await reply(message, '😀 Emoji reactions: ✅ ON', client); return true; }
+      if (mode === 'off') { setConfig('reactionsEnabled', false); await reply(message, '😀 Emoji reactions: ❌ OFF', client); return true; }
+      await reply(message, '❌ Usage: /reaction on|off', client);
       return true;
     }
 

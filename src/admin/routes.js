@@ -140,21 +140,80 @@ function createRoutes(botState, client) {
       replyToInbox: config.replyToInbox !== false,
       replyToGroups: config.replyToGroups === true,
       botName: config.botName || 'AI Assistant',
-      botEnabled: config.botEnabled !== false
+      botEnabled: config.botEnabled !== false,
+      // Group Conversation Intelligence
+      groupPrompt: config.groupPrompt || '',
+      groupReplyChance: parseFloat(config.groupReplyChance) || 0.25,
+      groupCooldownSec: parseInt(config.groupCooldownSec) || 45,
+      reactionsEnabled: config.reactionsEnabled !== false,
+      reactionChance: parseFloat(config.reactionChance) || 0.12,
+      questionBoostChance: parseFloat(config.questionBoostChance) || 0.6,
+      groupSettings: config.groupSettings || {}
     });
   });
 
   router.post('/api/settings', (req, res) => {
-    const { botPrompt, replyToInbox, replyToGroups, botName, botEnabled } = req.body;
+    const { botPrompt, replyToInbox, replyToGroups, botName, botEnabled, groupPrompt, groupReplyChance, groupCooldownSec, reactionsEnabled, reactionChance, questionBoostChance, groupSettings } = req.body;
     const config = readJSON('config.json') || {};
 
     if (typeof botPrompt === 'string') config.botPrompt = botPrompt;
     if (typeof replyToInbox === 'boolean') config.replyToInbox = replyToInbox;
     if (typeof replyToGroups === 'boolean') config.replyToGroups = replyToGroups;
     if (typeof botName === 'string') config.botName = botName;
+    if (typeof groupPrompt === 'string') config.groupPrompt = groupPrompt;
+    if (groupReplyChance !== undefined) config.groupReplyChance = Math.min(Math.max(parseFloat(groupReplyChance) || 0, 1), 1);
+    if (groupCooldownSec !== undefined) config.groupCooldownSec = Math.max(parseInt(groupCooldownSec) || 0, 0);
+    if (typeof reactionsEnabled === 'boolean') config.reactionsEnabled = reactionsEnabled;
+    if (reactionChance !== undefined) config.reactionChance = Math.min(Math.max(parseFloat(reactionChance) || 0, 1), 1);
+    if (questionBoostChance !== undefined) config.questionBoostChance = Math.min(Math.max(parseFloat(questionBoostChance) || 0, 1), 1);
+    if (groupSettings && typeof groupSettings === 'object') config.groupSettings = groupSettings;
 
     writeJSON('config.json', config);
     res.json({ success: true });
+  });
+
+  // API: List WhatsApp groups (for per-group intelligence settings)
+  router.get('/api/groups', async (req, res) => {
+    try {
+      if (!client || !client.pupPage || client.pupPage.isClosed()) return res.json([]);
+      const groups = await Promise.race([
+        client.pupPage.evaluate(() => {
+          try {
+            const Chat = window.require('WAWebCollections').Chat;
+            const models = Chat.getModelsArray();
+            return models
+              .filter(c => c.isGroup)
+              .map(c => ({
+                name: c.formattedTitle || c.name || 'Unnamed',
+                id: c.id ? c.id._serialized : ''
+              }));
+          } catch (e) { return []; }
+        }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000))
+      ]);
+      res.json(groups || []);
+    } catch (e) {
+      res.json([]);
+    }
+  });
+
+  // API: Set per-group intelligence mode
+  router.post('/api/groups/:id/mode', (req, res) => {
+    const { mode, chance, reset } = req.body;
+    const gIntel = require('../bot/group-intel');
+    const config = readJSON('config.json') || {};
+    if (reset === true) {
+      config.groupSettings = gIntel.resetGroupSettings(req.params.id, config);
+    } else {
+      if (mode && ['chatty', 'normal', 'mention'].includes(mode)) {
+        config.groupSettings = gIntel.setGroupMode(req.params.id, mode, config);
+      }
+      if (chance !== undefined) {
+        config.groupSettings = gIntel.setGroupChance(req.params.id, chance, config);
+      }
+    }
+    writeJSON('config.json', config);
+    res.json({ success: true, settings: config.groupSettings || {} });
   });
 
   // API: Bot On/Off Toggle
