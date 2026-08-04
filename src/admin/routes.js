@@ -27,7 +27,7 @@ const LOG_WRITE_FLAGS = { flag: 'a' };
 
 function broadcastLog(level, args) {
   const msg = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
-  const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  const time = new Date().toLocaleTimeString('en-GB', { hour12: false, timeZone: 'Asia/Dhaka' });
   const entry = { time, level, msg };
   logBuffer.push(entry);
   if (logBuffer.length > MAX_LOGS) logBuffer.shift();

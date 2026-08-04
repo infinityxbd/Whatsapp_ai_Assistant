@@ -16,7 +16,7 @@ const processedMessages = new Set();
 const MAX_PROCESSED_CACHE = 5000;
 
 function formatTime() {
-  return new Date().toLocaleTimeString('en-US', { hour12: false });
+  return new Date().toLocaleTimeString('en-US', { hour12: false, timeZone: 'Asia/Dhaka' });
 }
 
 function sleep(ms) {

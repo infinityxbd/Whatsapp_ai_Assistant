@@ -32,8 +32,30 @@ function hasCache() {
   return false;
 }
 
+// Kill ONLY orphaned Chrome processes (parent = init/1, i.e. left behind by a
+// previously crashed or killed bot). NEVER kills this bot's own browser —
+// killing the live browser every 15 min is what used to silently put the bot
+// "to sleep".
 function killStaleChrome() {
-  try { require('child_process').execSync('killall -9 chrome chromium chromium-browser 2>/dev/null', { stdio: 'ignore' }); } catch (e) {}
+  try {
+    const { execSync } = require('child_process');
+    const out = execSync(
+      "ps -eo pid=,ppid=,comm= | grep -E 'chrome|chromium' | grep -v grep || true",
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }
+    );
+    const killed = [];
+    for (const line of out.split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 2) continue;
+      const pid = parseInt(parts[0]);
+      const ppid = parseInt(parts[1]);
+      // ppid === 1 means the parent process is gone → safe to clean up
+      if (pid && ppid === 1) {
+        try { process.kill(pid, 'SIGKILL'); killed.push(pid); } catch (e) {}
+      }
+    }
+    if (killed.length) console.log(`🧹 Killed ${killed.length} orphaned chrome process(es)`);
+  } catch (e) {}
 }
 
 // Auto clean only runs when there is actually a cache to clean. If no cache

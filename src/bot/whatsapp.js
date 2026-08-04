@@ -112,6 +112,14 @@ const args = [
   '--metrics-recording-only',
   '--mute-audio',
   '--no-default-browser-check',
+  // ── Anti-sleep: stop Chrome from throttling/freezing the WhatsApp tab so
+  // the bot stays responsive 24/7 instead of silently "falling asleep". ──
+  '--disable-background-timer-throttling',
+  '--disable-renderer-backgrounding',
+  '--disable-backgrounding-occluded-windows',
+  '--disable-ipc-flooding-protection',
+  '--disable-hang-monitor',
+  '--disable-background-media-suspend',
 ];
 
 const puppeteerConfig = {
@@ -130,7 +138,7 @@ const client = new Client({
   puppeteer: puppeteerConfig,
 });
 
-const botState = { status: 'offline', startTime: null, botWid: null, lidMap: {} };
+const botState = { status: 'offline', startTime: null, botWid: null, lidMap: {}, lastOnline: null };
 
 function setBotStatus(status) {
   botState.status = status;
@@ -138,6 +146,42 @@ function setBotStatus(status) {
 }
 
 let onlineInterval = null;
+
+// ─── Auto-reconnect: brings the bot back online by itself after a
+// disconnect / auth failure so it never stays "asleep" until a manual
+// restart. Uses increasing backoff (10s → 20s → 40s → … max 2 min).
+let reconnecting = false;
+let reconnectDelay = 10000;
+let reconnectTimer = null;
+
+function scheduleReconnect() {
+  if (reconnecting || reconnectTimer) return;
+  reconnecting = true;
+  const delay = reconnectDelay;
+  console.log(`🔄 Auto-reconnect in ${Math.round(delay / 1000)}s...`);
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    try {
+      // Client came back online on its own while we were waiting → skip
+      if (botState.status === 'online') {
+        reconnectDelay = 10000;
+        return;
+      }
+      botState.status = 'offline';
+      qrShown = false; // log a fresh QR if the session expired
+      await client.initialize();
+      reconnectDelay = 10000;
+      console.log('✅ Reconnect attempt finished');
+    } catch (e) {
+      console.error(`❌ Reconnect failed: ${e.message}`);
+      reconnectDelay = Math.min(reconnectDelay * 2, 120000);
+    } finally {
+      reconnecting = false;
+      // If we're still not online, try again with backoff
+      if (botState.status !== 'online') scheduleReconnect();
+    }
+  }, delay);
+}
 
 function cleanWid(id) {
   return String(id).replace(/@c\.us/, '').replace(/@lid/, '').replace(/@g\.us/, '');
@@ -272,12 +316,20 @@ client.on('authenticated', () => {
 client.on('auth_failure', (msg) => {
   console.error('❌ Auth failed:', msg);
   botState.status = 'offline';
+  if (onlineInterval) clearInterval(onlineInterval);
+  if (global._cacheCleanInterval) clearInterval(global._cacheCleanInterval);
+  scheduleReconnect();
 });
 
 client.on('ready', async () => {
   // Set online FIRST so admin panel shows correct status immediately
   botState.status = 'online';
   botState.startTime = Date.now();
+  botState.lastOnline = Date.now();
+  // Cancel any pending reconnect so we never double-initialize a live client
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnecting = false;
+  reconnectDelay = 10000;
 
   try {
     const wid = client.info.wid;
@@ -323,6 +375,8 @@ client.on('disconnected', (reason) => {
   console.log('🔴 Disconnected:', reason);
   botState.status = 'offline';
   if (onlineInterval) clearInterval(onlineInterval);
+  if (global._cacheCleanInterval) clearInterval(global._cacheCleanInterval);
+  scheduleReconnect();
 });
 
 // Use message_create to catch ALL messages including self-sent

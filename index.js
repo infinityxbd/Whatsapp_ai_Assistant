@@ -4,6 +4,10 @@
  * Co-Founder, Senior Admin @ Student Cyber Expert Force (SCEF)
  * Telegram: https://t.me/infinityxbd
  */
+// Use Bangladeshi local time (UTC+6) for ALL log timestamps, regardless of
+// the server's own timezone.
+process.env.TZ = 'Asia/Dhaka';
+
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -88,6 +92,37 @@ async function main() {
     softRestart(client, 'hourly auto-restart');
   }, autoRestartInterval);
   console.log(`⏰ Auto soft restart scheduled every ${autoRestartHours}h`);
+
+  // ─── 24/7 Watchdog: never lets the bot stay "asleep" ───
+  // Checks every 5 min. Restarts if:
+  //   1. The bot was online before but has been offline for 10+ min
+  //      (e.g. a browser crash the auto-reconnect could not recover).
+  //   2. The bot claims to be online but the browser page is actually
+  //      unresponsive (silent freeze — no message events anymore).
+  setInterval(async () => {
+    try {
+      if (botState.status !== 'online') {
+        if (botState.lastOnline && Date.now() - botState.lastOnline > 10 * 60 * 1000) {
+          console.log('⏰ Watchdog: bot offline for >10min — restarting');
+          softRestart(client, 'watchdog offline');
+        }
+        return;
+      }
+
+      // Online → verify the browser page is really alive
+      const alive = await Promise.race([
+        client.pupPage.evaluate(() => 1).then(() => true).catch(() => false),
+        new Promise((res) => setTimeout(() => res(false), 30000))
+      ]);
+      if (!alive) {
+        console.log('⏰ Watchdog: browser unresponsive — restarting');
+        softRestart(client, 'watchdog browser-unresponsive');
+      }
+    } catch (e) {
+      console.log('⏰ Watchdog check error:', e.message);
+    }
+  }, 5 * 60 * 1000);
+  console.log('⏰ 24/7 Watchdog enabled (checks every 5 min)');
 
   console.log('📱 Starting WhatsApp client...\n');
 
