@@ -10,6 +10,7 @@ const memoryService = require('../memory/service');
 
 const MAX_HISTORY = 10;
 const chatHistories = {};
+const MAX_TRACKED_CHATS = 2000; // bound the per-chat history map (memory leak guard)
 const MAX_CONCURRENT = 3;
 let activeCount = 0;
 const processedMessages = new Set();
@@ -108,7 +109,15 @@ async function isBlocked(message, client) {
 }
 
 function getChatHistory(chatId) {
-  if (!chatHistories[chatId]) chatHistories[chatId] = [];
+  if (!chatHistories[chatId]) {
+    // Bound total tracked chats — when the map exceeds the cap, drop the
+    // oldest chat so memory never grows without limit on long-running bots.
+    const keys = Object.keys(chatHistories);
+    if (keys.length >= MAX_TRACKED_CHATS) {
+      delete chatHistories[keys[0]];
+    }
+    chatHistories[chatId] = [];
+  }
   return chatHistories[chatId];
 }
 
@@ -265,6 +274,26 @@ async function handleMessage(message, client) {
     }
 
     const commandSenderId = isGroup ? (message.author || message.from) : message.from;
+
+    // ─── Blocked senders get complete silence (no command replies either) ───
+    // Commands are handled before the reply blocklist gate, so without this a
+    // blocked user would still receive "not authorized" replies to commands —
+    // defeating the purpose of blocking. Only runs for actual command messages
+    // (cheap — commands are rare compared to normal messages).
+    // The BOT OWNER is always exempt so they can self-recover via /unblock if
+    // their own number was ever blocked.
+    const senderDigits = String(commandSenderId || '').replace(/\D/g, '');
+    const botDigits = String(botState.botWid || '').replace(/\D/g, '');
+    const isBotOwner = !!(senderDigits && botDigits && senderDigits === botDigits);
+    if (!isBotOwner && (message.body || '').trim().startsWith('/')) {
+      const preBlocklist = readJSON('blocklist.json') || { numbers: [], groups: [] };
+      const preBlockedNum = preBlocklist.numbers.length > 0 && await isBlocked(message, client);
+      const preBlockedGrp = isGroup && preBlocklist.groups.some(g => cleanId(g) === cleanId(message.from));
+      if (preBlockedNum || preBlockedGrp) {
+        console.log(`⛔ Blocked sender command ignored (complete silence): ${message.from}`);
+        return;
+      }
+    }
 
     // Commands from other admins
     const isCommand = await handleCommand(message, client, botState.botWid, botState.lidMap, commandSenderId);

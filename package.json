@@ -7,6 +7,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "test": "node --test test/*.test.js",
     "stop": "pkill -f 'node index.js' 2>/dev/null; pkill -f 'chromium' 2>/dev/null; pkill -f 'chrome' 2>/dev/null; echo 'Bot stopped'",
     "dev": "nodemon index.js"
   },

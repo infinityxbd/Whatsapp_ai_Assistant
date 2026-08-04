@@ -594,6 +594,11 @@
               <div class="helper">Time the bot stays quiet after its own message</div>
             </div>
             <div>
+              <label>Reaction Chance (0–1)</label>
+              <input type="number" id="reactionChance" min="0" max="1" step="0.05" value="0.12">
+              <div class="helper">Chance to react with emoji instead of a full reply (0 = off)</div>
+            </div>
+            <div>
               <label>Reaction Reply Chance (0–1)</label>
               <input type="number" id="reactionReplyChance" min="0" max="1" step="0.05" value="0.2">
               <div class="helper">Chance to answer when a reaction is on the bot's message</div>
@@ -689,6 +694,20 @@
           <span class="toggle-slider"></span>
         </label>
       </div>
+      <div class="toggle-card" style="border-color: rgba(88,166,255,0.3);">
+        <div class="toggle-info">
+          <div class="title">🤖 AI Memory Analysis</div>
+          <div class="desc">Main AI analyzes recent conversations to extract name, language/style, interests, preferences &amp; facts — merged, never overwritten</div>
+          <div style="margin-top:10px;display:flex;gap:10px;align-items:center;">
+            <input type="number" id="memoryAnalyzeEvery" min="5" max="100" style="width:90px;" onchange="saveMemorySettings()">
+            <span style="font-size:13px;color:#8b949e;">messages between auto-analysis</span>
+          </div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggleMemoryAnalyze" onchange="saveMemorySettings()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
       <div class="header-row">
         <div style="display:flex;gap:8px;align-items:center;">
           <div style="font-size:15px;font-weight:600;">👥 Users with Memory <span class="badge badge-active" id="memoryUserCount">0</span></div>
@@ -702,6 +721,7 @@
               <th>User</th>
               <th>Language</th>
               <th>Messages</th>
+              <th>Last Analysis</th>
               <th>Last Interaction</th>
               <th>Memory</th>
               <th style="text-align:right;">Actions</th>
@@ -719,11 +739,13 @@
         <h3>🧠 Edit User Memory <span id="memoryModalKey" style="font-size:12px;color:#8b949e;"></span></h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div><label>Name</label><input type="text" id="memName"></div>
-          <div><label>Language</label>
+          <div>        <label>Language</label>
             <select id="memLanguage" class="sel">
               <option value="">Auto</option>
               <option value="bn">Bangla</option>
+              <option value="bl">Banglish</option>
               <option value="en">English</option>
+              <option value="mixed">Mixed</option>
               <option value="ar">Arabic</option>
             </select>
           </div>
@@ -736,8 +758,13 @@
         <textarea id="memPreferences" style="min-height:70px;font-size:13px;"></textarea>
         <label>Important Facts (one per line)</label>
         <textarea id="memFacts" style="min-height:70px;font-size:13px;"></textarea>
+        <label>Communication Habits (one per line)</label>
+        <textarea id="memHabits" style="min-height:50px;font-size:13px;"></textarea>
         <label>Admin Notes</label>
         <textarea id="memNotes" style="min-height:50px;font-size:13px;"></textarea>
+        <div class="info-banner" style="margin-top:12px;font-size:13px;">
+          🕒 Last AI analysis: <span id="memLastAnalyzed">—</span> &nbsp;|&nbsp; 📊 Messages analyzed: <span id="memAnalyzedCount">0</span>
+        </div>
         <div class="toggle-card" style="margin-top:14px;padding:14px 18px;">
           <div class="toggle-info">
             <div class="title">Memory enabled for this user</div>
@@ -750,6 +777,7 @@
         </div>
         <div class="modal-actions">
           <button class="btn btn-danger" onclick="deleteMemory(currentMemoryKey)">🗑 Delete</button>
+          <button class="btn btn-outline" onclick="analyzeMemory(currentMemoryKey)">🧠 Analyze Now</button>
           <button class="btn btn-outline" onclick="document.getElementById('memoryModal').classList.remove('show')">Cancel</button>
           <button class="btn btn-primary" onclick="saveMemory(currentMemoryKey)">Save</button>
         </div>
@@ -1145,8 +1173,44 @@
         const res = await fetch('/admin/api/memory', { credentials: 'same-origin' });
         memoryData = await res.json();
         document.getElementById('toggleMemoryGlobal').checked = memoryData.globalEnabled;
+        try {
+          const sres = await fetch('/admin/api/settings', { credentials: 'same-origin' });
+          const s = await sres.json();
+          document.getElementById('toggleMemoryAnalyze').checked = s.memoryAnalyzeEnabled !== false;
+          document.getElementById('memoryAnalyzeEvery').value = s.memoryAnalyzeEvery || 20;
+        } catch(e) {}
         renderMemoryUsers();
       } catch(e) {}
+    }
+
+    async function saveMemorySettings() {
+      const enabled = document.getElementById('toggleMemoryAnalyze').checked;
+      const every = parseInt(document.getElementById('memoryAnalyzeEvery').value) || 20;
+      try {
+        await fetch('/admin/api/settings', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ memoryAnalyzeEnabled: enabled, memoryAnalyzeEvery: every })
+        });
+        showToast('Memory analysis settings saved');
+      } catch(e) { showToast('Failed to save settings', 'error'); }
+    }
+
+    async function analyzeMemory(key) {
+      showToast('🧠 Analyzing memory...', 'info');
+      try {
+        const res = await fetch('/admin/api/memory/' + encodeURIComponent(key) + '/analyze', {
+          method: 'POST', credentials: 'same-origin'
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('✅ Memory analyzed & updated');
+          loadMemory();
+          if (currentMemoryKey === key) openMemoryModal(key);
+        } else {
+          showToast(data.error || 'Analysis failed', 'error');
+        }
+      } catch(e) { showToast('Analysis failed', 'error'); }
     }
 
     function renderMemoryUsers() {
@@ -1165,14 +1229,18 @@
       empty.style.display = 'none';
       body.innerHTML = users.map(u => {
         const last = u.lastInteraction ? new Date(u.lastInteraction).toLocaleString() : '—';
-        const lang = u.language === 'bn' ? 'Bangla' : u.language === 'en' ? 'English' : u.language === 'ar' ? 'Arabic' : (u.language || '—');
+        const lastAnalyzed = u.lastAnalyzedAt ? new Date(u.lastAnalyzedAt).toLocaleString() : '—';
+        const langMap = { bn: 'Bangla', bl: 'Banglish', en: 'English', mixed: 'Mixed', ar: 'Arabic' };
+        const lang = langMap[u.language] || (u.language || '—');
         return `<tr>
           <td><b>${escHtml(u.name || '—')}</b><br><small style="color:#8b949e">${escHtml(u.key)}</small></td>
           <td>${escHtml(lang)}</td>
           <td>${u.totalMessages || 0}</td>
+          <td>${escHtml(lastAnalyzed)}</td>
           <td>${escHtml(last)}</td>
           <td>${u.memoryEnabled ? '<span class="badge badge-active">ON</span>' : '<span class="badge badge-disabled">OFF</span>'}</td>
           <td style="text-align:right;white-space:nowrap;">
+            <button class="btn btn-sm" style="background:rgba(88,166,255,0.15);color:#58a6ff;" onclick="analyzeMemory('${escHtml(u.key)}')">🧠 Analyze</button>
             <button class="btn btn-outline btn-sm" onclick="openMemoryModal('${escHtml(u.key)}')">👁 View/Edit</button>
             <button class="btn btn-sm ${u.memoryEnabled ? 'btn-danger' : 'btn-primary'}" onclick="toggleUserMemory('${escHtml(u.key)}')">${u.memoryEnabled ? 'Disable' : 'Enable'}</button>
           </td>
@@ -1220,8 +1288,11 @@
         document.getElementById('memInterests').value = (p.interests || []).join('\n');
         document.getElementById('memPreferences').value = (p.preferences || []).join('\n');
         document.getElementById('memFacts').value = (p.facts || []).join('\n');
+        document.getElementById('memHabits').value = (p.habits || []).join('\n');
         document.getElementById('memNotes').value = p.notes || '';
         document.getElementById('memEnabled').checked = p.memoryEnabled !== false;
+        document.getElementById('memLastAnalyzed').textContent = p.lastAnalyzedAt ? new Date(p.lastAnalyzedAt).toLocaleString() : '—';
+        document.getElementById('memAnalyzedCount').textContent = p.analyzedMessageCount || 0;
         document.getElementById('memoryModal').classList.add('show');
       } catch(e) { showToast('Failed to load memory', 'error'); }
     }
@@ -1235,6 +1306,7 @@
         interests: splitLines(document.getElementById('memInterests').value),
         preferences: splitLines(document.getElementById('memPreferences').value),
         facts: splitLines(document.getElementById('memFacts').value),
+        habits: splitLines(document.getElementById('memHabits').value),
         notes: document.getElementById('memNotes').value.trim(),
         memoryEnabled: document.getElementById('memEnabled').checked
       };
@@ -1533,6 +1605,7 @@
         document.getElementById('toggleGroups').checked = data.replyToGroups;
         document.getElementById('toggleReactions').checked = data.reactionsEnabled !== false;
         document.getElementById('toggleReplyToReactions').checked = data.replyToReactions === true;
+        document.getElementById('reactionChance').value = data.reactionChance || 0.12;
         document.getElementById('reactionReplyChance').value = data.reactionReplyChance || 0.2;
         document.getElementById('groupReplyChance').value = data.groupReplyChance || 0.25;
         document.getElementById('questionBoostChance').value = data.questionBoostChance || 0.6;
@@ -1580,6 +1653,7 @@
             replyToGroups: document.getElementById('toggleGroups').checked,
             reactionsEnabled: document.getElementById('toggleReactions').checked,
             replyToReactions: document.getElementById('toggleReplyToReactions').checked,
+            reactionChance: parseFloat(document.getElementById('reactionChance').value) || 0,
             reactionReplyChance: parseFloat(document.getElementById('reactionReplyChance').value) || 0,
             groupReplyChance: parseFloat(document.getElementById('groupReplyChance').value) || 0,
             questionBoostChance: parseFloat(document.getElementById('questionBoostChance').value) || 0,

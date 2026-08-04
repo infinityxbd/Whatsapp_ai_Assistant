@@ -8,6 +8,12 @@ const { readJSON, writeJSON } = require('../storage/store');
 const { decrypt } = require('../storage/encryption');
 const { createProvider } = require('./providers');
 
+// Overall cap on how long a single AI reply may spend across ALL provider
+// attempts (each provider already has its own 30s request timeout). Without
+// this, a cluster of slow/failing APIs could hold a message-handler slot for
+// minutes, wedging the MAX_CONCURRENT queue and dropping messages.
+const OVERALL_AI_DEADLINE_MS = 90000;
+
 const DEFAULT_FALLBACK_MESSAGES = [
   "Assalamu Alaikum, ami ekhon offline achi. Online asle reply dibo In sha Allah.",
   "Hey ki obostha! Ekhon reply dite parchi na. Online asle tumar sathe kotha bolbo.",
@@ -96,7 +102,13 @@ class AIService {
     // otherwise the model may return prose instead of the expected JSON.
     const forceSystemPrompt = !!(options && options.forceSystemPrompt);
 
+    const overallDeadline = Date.now() + OVERALL_AI_DEADLINE_MS;
     for (const api of activeAPIs) {
+      // Don't start another provider attempt if the overall budget is spent.
+      if (Date.now() > overallDeadline) {
+        console.log('⏱️ Overall AI deadline reached — skipping remaining providers');
+        break;
+      }
       try {
         const apiConfig = getAPIConfig(api);
         if (!apiConfig.apiKey) {
@@ -226,6 +238,56 @@ Reply with ONLY a JSON object (no markdown, no extra text):
       intent: validIntents.includes(parsed.intent) ? parsed.intent : 'casual',
       confidence: isNaN(conf) ? 0 : Math.min(Math.max(conf, 0), 1),
       reply
+    };
+  }
+
+  /**
+   * AI User-Memory extraction. Given recent messages + the existing memory
+   * summary, extracts stable long-term user info as strict JSON. Conservative
+   * by design: only clearly-supported facts are kept, the name is only set
+   * from an explicit self-introduction, and language is judged by writing
+   * STYLE (Banglish detected even when the language is Bengali).
+   * Returns a sanitized object or null on failure.
+   * @param {Object} context  { messages, existingSummary }
+   */
+  async extractUserMemory(context = {}) {
+    const messages = String(context.messages || '').slice(0, 6000);
+    const existing = String(context.existingSummary || '(none)');
+    const prompt = `You are the memory engine for a WhatsApp assistant. Analyze the recent conversation below and extract stable, long-term USER information.
+
+RECENT MESSAGES (User = the person being profiled, Bot = the assistant):
+${messages}
+
+EXISTING MEMORY SUMMARY:
+${existing}
+
+RULES (follow strictly):
+1. NAME: only provide a name if the user EXPLICITLY introduced themselves ("Amar nam X", "My name is X", "I am X", "Call me X", "amake X bole dake"). Never invent a name. NEVER use a random word, question or phrase (like "ki bolto") as a name. If unsure, return null.
+2. LANGUAGE: judge by the ACTUAL writing style of the user's messages, not by script alone. Bangla script → "bangla". Bangla words typed in Latin letters ("Ki koros?", "Khaichis?", "Ajke ki korbi?") → "banglish". English → "english". A clear mix → "mixed".
+3. INTERESTS / PREFERENCES / FACTS / HABITS: only include items CLEARLY supported by the conversation (e.g. "gaming", "ami cricket pochondo kori", "prefers short casual replies", "uses emoji"). Never invent. Max 5 items each. Each item is a short phrase, max 60 chars.
+4. STYLE: one short phrase describing how the user communicates (casual/formal, short/detailed replies, emoji use, greeting style). Max 120 chars.
+5. Only stable, useful facts. Skip one-off, transient or sensitive details.
+
+Reply with ONLY a JSON object (no markdown, no extra text):
+{"name": null or "string", "language": "bangla"|"banglish"|"english"|"mixed"|null, "style": null or "string", "interests": ["..."], "preferences": ["..."], "facts": ["..."], "habits": ["..."]}`;
+
+    const result = await this._ask(prompt, [], { systemPrompt: prompt, forceSystemPrompt: true });
+    const parsed = parseDecisionJson(result.success ? result.text : '');
+    if (!parsed || typeof parsed !== 'object') {
+      console.log(`🧠 Memory extraction failed (${result.error || 'unparseable'})`);
+      return null;
+    }
+    const str = v => (typeof v === 'string' ? v.trim() : '');
+    const arr = v => (Array.isArray(v) ? v.map(x => str(x)).filter(Boolean).slice(0, 5) : []);
+    const langRaw = String(parsed.language || '').toLowerCase();
+    return {
+      name: str(parsed.name) || null,
+      language: ['bangla', 'banglish', 'english', 'mixed'].includes(langRaw) ? langRaw : null,
+      style: str(parsed.style) || null,
+      interests: arr(parsed.interests),
+      preferences: arr(parsed.preferences),
+      facts: arr(parsed.facts),
+      habits: arr(parsed.habits)
     };
   }
 

@@ -1,4 +1,4 @@
-generatesminiiv align="center">
+<div align="center">
 
 # 🤖 WhatsApp AI Auto-Reply Bot
 
@@ -24,7 +24,9 @@ Made by **[Tarif Ahmed (infinityX)](https://t.me/infinityxbd)** · Co-Founder, S
 ## 📸 Overview
 
 A complete WhatsApp AI bot solution with:
-- 🧠 **Gemini,Open AI and any platform with custom  AI** powered smart replies with chat history
+- 🧠 **Multi-provider AI** (Gemini, OpenAI-compatible, Anthropic, 1min.ai, custom REST) with automatic fallback
+- 👥 **Group Conversation Intelligence** — hybrid AI flow that replies naturally, stays silent in private chats, and saves tokens
+- 🧠 **AI User Memory** — remembers names, language/style, interests, preferences & facts per user
 - 🌐 **Web Admin Panel** to control everything from browser
 - 👥 **Group & Inbox control** with mute/archive ignore
 - 🔐 **Pairing code login** — no QR scan needed
@@ -38,10 +40,12 @@ A complete WhatsApp AI bot solution with:
 ### 🤖 AI Bot
 | Feature | Description |
 |---------|-------------|
-| Smart Replies |Custom GeminiesI generates context-aware responses |
-| Chat History | Last 7 messages remembered per conversation |
-| Human-like Behavior | Random typing delay (1-10s), seen receipts, online presence |
-| Multi-key Fallback | Add multiple API keys, auto-switches on failure |
+| Smart Replies | Multi-provider AI generates context-aware responses |
+| Chat History | Last messages remembered per conversation (bounded) |
+| Human-like Behavior | Random typing delay, seen receipts, online presence |
+| Multi-provider Fallback | Add multiple AI APIs, auto-switches on failure |
+| Group Intelligence | Replies to mentions/questions, silent in private chats |
+| User Memory | AI extracts name, language, interests, preferences & facts |
 
 ### 👥 Chat Control
 | Feature | Description |
@@ -59,7 +63,7 @@ A complete WhatsApp AI bot solution with:
 | Multi Admin | Add multiple WhatsApp numbers as admin |
 | Chat Commands | Control bot via WhatsApp messages |
 | Factory Reset | One-click full data wipe |
-| API Key Manager | Add/remove/test Gemini API keys |
+| API Manager | Add/remove/test multiple AI providers (Gemini, OpenAI, Anthropic, custom) |
 
 ---
 
@@ -68,7 +72,7 @@ A complete WhatsApp AI bot solution with:
 ```
 Runtime    : Node.js 18+
 WhatsApp   : whatsapp-web.js (Puppeteer + Chrome)
-AI Engine  : Google Gemini API
+AI Engine  : Multi-provider (Gemini, OpenAI-compatible, Anthropic, 1min.ai, custom REST)
 Admin Panel: Express.js + Vanilla HTML/CSS/JS
 Database   : JSON file storage
 Auth       : bcrypt + express-session
@@ -143,17 +147,21 @@ Admin users can control the bot by sending commands in WhatsApp:
 
 | Command | Description |
 |---------|-------------|
-| `/onbot` | Turn bot ON |
-| `/offbot` | Turn bot OFF |
-| `/oninbox` | Enable inbox replies |
-| `/offinbox` | Disable inbox replies |
-| `/ongroup` | Enable group replies |
-| `/offgroup` | Disable group replies |
+| `/onbot` / `/offbot` | Turn bot ON / OFF |
+| `/oninbox` / `/offinbox` | Enable / disable inbox replies |
+| `/ongroup` / `/offgroup` | Enable / disable group replies |
 | `/block 8801XXXXXXXXX` | Block a number |
 | `/unblock 8801XXXXXXXXX` | Unblock a number |
 | `/blocklist` | View all blocked numbers/groups |
 | `/gplist` | List all groups with IDs |
 | `/status` | Show bot status + uptime |
+| `/restart` | Restart the bot |
+| `/unsent` | Show recently unsent (deleted) messages |
+| `/groupai on\|off` | Toggle hybrid AI group decision flow |
+| `/groupmode` | Group behavior settings |
+| `/analyzememory [number]` | Run AI memory analysis now |
+| `/mymemory` | See what the bot remembers about you |
+| `/forgetme` | Delete your stored memory data |
 | `/help` | Show all commands |
 
 ---
@@ -162,37 +170,52 @@ Admin users can control the bot by sending commands in WhatsApp:
 
 ```
 whatsapp-bot/
-├── index.js                  # Entry point + auto-clean
-├── setup.sh                  # VPS one-click setup
+├── index.js                  # Entry point + watchdog + auto-clean
+├── setup.sh / set.sh         # VPS one-click setup
+├── update.sh                 # Safe update (keeps session & data)
 ├── .env                      # Environment variables
 ├── package.json
 │
 ├── data/                     # Bot data (JSON files)
 │   ├── config.json           # Bot settings & password
-│   ├── apikeys.json          # Gemini API keys
+│   ├── ai_apis.json          # AI providers (encrypted keys)
+│   ├── apikeys.json          # Legacy Gemini API keys
 │   ├── blocklist.json        # Blocked numbers/groups
 │   ├── adminusers.json       # Admin WhatsApp numbers
-│   └── keystatus.json        # API key health status
+│   ├── memory.json           # AI User Memory profiles
+│   ├── unsent.json           # Genuine "Delete for everyone" records
+│   ├── fallbackmessages.json # Custom fallback reply list
+│   ├── keystatus.json        # API key health status
+│   └── group-decisions.jsonl # Group AI decision audit log
 │
 └── src/
     ├── bot/
-    │   ├── whatsapp.js       # WhatsApp client + pairing
-    │   ├── handler.js        # Message handler + mute/archive check
-    │   └── commands.js       # All chat commands + auth
+    │   ├── whatsapp.js       # WhatsApp client + pairing + LID resolver
+    │   ├── handler.js        # Message handler + hybrid AI group flow
+    │   ├── commands.js       # All chat commands + auth
+    │   ├── group-intel.js    # Group conversation intelligence
+    │   ├── unsent.js         # Unsent (revoked) message store
+    │   ├── cache.js          # Chrome cache auto-clean
+    │   └── restart.js        # Soft restart helper
     │
     ├── ai/
-    │   └── gemini.js         # Gemini AI + multi-key fallback
+    │   ├── service.js        # Provider loop + decision/memory engines
+    │   └── providers/        # Gemini, OpenAI-compatible, Anthropic, 1min.ai, custom
+    │
+    ├── memory/
+    │   └── service.js        # AI User Memory (extraction, merge, batching)
     │
     ├── admin/
     │   ├── server.js         # Express server setup
     │   ├── routes.js         # All API routes + factory reset
-    │   ├── middleware.js      # Session auth middleware
+    │   ├── middleware.js     # Session auth middleware
     │   └── views/
     │       ├── login.html    # Admin login page
     │       └── dashboard.html # Full admin dashboard
     │
     └── storage/
-        └── store.js          # JSON file read/write
+        ├── store.js          # JSON file read/write
+        └── encryption.js     # AES-256 key encryption
 ```
 
 ---
@@ -205,8 +228,8 @@ ADMIN_PORT=3001
 DEFAULT_ADMIN_PASSWORD=admin123
 SESSION_SECRET=your-random-string-here
 
-# WhatsApp (your phone number with country code, no +)
-WHATSAPP_PHONE=8801XXXXXXXXX
+# Auto soft restart interval (hours, default 1)
+AUTO_RESTART_HOURS=1
 ```
 
 ---
@@ -218,11 +241,19 @@ User sends WhatsApp message
         ↓
 Bot checks: muted? archived? blocked? bot enabled?
         ↓ (all clear)
-Typing simulation (random 1-10s delay)
+User memory context built (name, language, interests...)
         ↓
-Message sent to Gemini AI with chat history
+Group message? → Group Intelligence (hybrid AI flow)
+    • Name/@mention/reply-to-bot  → full AI reply, always
+    • Open group question          → AI reply ("Keo aso?", "Sobai kemon aso?")
+    • Unclear message              → main AI decides with recent context
+    • Human-to-human conversation  → stay silent (no AI call)
         ↓
-AI response sent back to user
+Typing simulation (natural delay)
+        ↓
+Reply generated by best AI provider (fallback if one fails)
+        ↓
+Reply sent + memory updated (batch AI analysis every N messages)
         ↓
 Online presence kept alive (every 2 min)
 ```

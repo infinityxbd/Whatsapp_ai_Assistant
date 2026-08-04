@@ -55,7 +55,10 @@ async function initDataFiles() {
       groupWhitelist: [],
       maxRepliesPerMinute: 4,
       duplicateReplySec: 120,
-      debugDecisionLogs: false
+      debugDecisionLogs: false,
+      // AI User Memory analysis defaults
+      memoryAnalyzeEnabled: true,
+      memoryAnalyzeEvery: 20
     };
     writeJSON('config.json', config);
     console.log('📁 Created default config.json');

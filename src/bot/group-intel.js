@@ -398,7 +398,7 @@ function shouldRandomReply(chatId, config, userMsg) {
 // "Rafi!", "Rafi-"). Case-insensitive per spec.
 function buildBotNameRe(botName) {
   const name = String(botName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp('(?:^|\\s|@)' + name + '(?=\\s|[,.;:!?।\\-()]|$)', 'i');
+  return new RegExp('(?:^|[\\s@("\\-\\x27\\u201C\\u2018])' + name + '(?=[\\s,.;:!?।\\-()"\\x27\\u201C\\u201D\\u2018\\u2019]|$)', 'i');
 }
 
 // True when the message uses the bot's name about the SENDER in first person

@@ -99,6 +99,10 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
   const senderId = commandSenderId || message.from;
   console.log(`🔍 Command: "${body}" from ${senderId} (chat: ${message.from})`);
 
+  // Shared memory language labels (bn=Bangla, bl=Banglish, mixed, en, ar)
+  const MEM_LANG_LABELS = { bn: 'Bangla', bl: 'Banglish', en: 'English', mixed: 'Mixed', ar: 'Arabic' };
+  const memLang = code => MEM_LANG_LABELS[code] || '—';
+
   // ─── Public memory commands — work for ANY user (privacy rights) ───
   const cmdLower = body.split(' ')[0].toLowerCase();
   if (cmdLower === '/mymemory' || cmdLower === '/forgetme') {
@@ -124,8 +128,9 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
     }
     let txt = '🧠 *Tomar Memory (amar jana kotha):*\n\n';
     txt += `👤 Name: ${profile.name || '—'}\n`;
-    txt += `🗣️ Language: ${profile.language === 'bn' ? 'Bangla' : profile.language === 'ar' ? 'Arabic' : profile.language === 'en' ? 'English' : '—'}\n`;
+    txt += `🗣️ Language: ${memLang(profile.language)}\n`;
     txt += `💬 Style: ${profile.style || '—'}\n`;
+    if ((profile.habits || []).length) txt += `🔄 Habits: ${profile.habits.join(', ')}\n`;
     if (profile.interests.length) txt += `⭐ Interests: ${profile.interests.join(', ')}\n`;
     if (profile.preferences.length) txt += `👍 Preferences: ${profile.preferences.join('; ')}\n`;
     if (profile.facts.length) txt += `📌 Facts: ${profile.facts.join('; ')}\n`;
@@ -499,6 +504,7 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
 /memory on|off — Global toggle
 /memlist — List users with memory
 /memview <number> — View memory
+/analyzememory [number] — Run AI memory analysis
 /memedit <number> <field> <value> — Edit
 /memdel <number> — Delete memory
 /memoff <number> — Disable user memory
@@ -518,6 +524,7 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
 /groupreset <id> — Remove per-group settings
 /grouplist — Configured groups
 /reaction on|off — Emoji reactions
+/groupai on|off — Hybrid AI decision flow
 
 *Other:*
 /gplist — Group list
@@ -571,7 +578,7 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       txt += `Reactions: ${reactions ? '✅ ON' : '❌ OFF'}\n`;
       txt += `Group prompt: ${(config.groupPrompt || '').trim() ? 'custom ✅' : 'default persona'}\n`;
       txt += `Per-group settings: ${customGroups} group${customGroups === 1 ? '' : 's'}\n\n`;
-      txt += `*Commands:*\n/groupprompt <text> — group personality\n/groupprompt reset — default persona\n/groupchance <0-1> — global chance\n/group <id> chatty|normal|mention — per-group mode\n/groupchance <id> <0-1> — per-group chance\n/groupreset <id> — remove per-group settings\n/grouplist — configured groups\n/reaction on|off — emoji reactions`;
+      txt += `*Commands:*\n/groupprompt <text> — group personality\n/groupprompt reset — default persona\n/groupchance <0-1> — global chance\n/group <id> chatty|normal|mention — per-group mode\n/groupchance <id> <0-1> — per-group chance\n/groupreset <id> — remove per-group settings\n/grouplist — configured groups\n/reaction on|off — emoji reactions\n/groupai on|off — hybrid AI decision flow`;
       await reply(message, txt, client);
       return true;
     }
@@ -653,21 +660,27 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       await reply(message, `✅ Group personality prompt updated!\n\n*New:*\n${param.substring(0, 200)}${param.length > 200 ? '...' : ''}`, client);
       return true;
     }
-    case '/groupchance': {
-      const val = parseFloat(param);
-      if (isNaN(val) || val < 0 || val > 1) {
-        await reply(message, '❌ Usage: /groupchance <0-1>\nExample: /groupchance 0.3 (30% random replies)', client);
-        return true;
-      }
-      setConfig('groupReplyChance', val);
-      await reply(message, `✅ Random group reply chance: ${Math.round(val * 100)}%`, client);
-      return true;
-    }
     case '/reaction': {
       const mode = param.trim().toLowerCase();
       if (mode === 'on') { setConfig('reactionsEnabled', true); await reply(message, '😀 Emoji reactions: ✅ ON', client); return true; }
       if (mode === 'off') { setConfig('reactionsEnabled', false); await reply(message, '😀 Emoji reactions: ❌ OFF', client); return true; }
       await reply(message, '❌ Usage: /reaction on|off', client);
+      return true;
+    }
+    case '/groupai': {
+      // Hybrid AI decision flow master switch
+      const mode = param.trim().toLowerCase();
+      if (mode === 'on') {
+        setConfig('groupAiEnabled', true);
+        await reply(message, '🧠 Group AI intelligence: ✅ ON\n\nHybrid flow: direct → always reply · open questions → reply · unclear → AI decides · human chats → silent', client);
+        return true;
+      }
+      if (mode === 'off') {
+        setConfig('groupAiEnabled', false);
+        await reply(message, '🧠 Group AI intelligence: ❌ OFF (mention/direct-only behavior)', client);
+        return true;
+      }
+      await reply(message, '❌ Usage: /groupai on|off', client);
       return true;
     }
 
@@ -719,7 +732,7 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       const enabled = memoryService.isGloballyEnabled();
       let txt = `🧠 *Memory System:* ${enabled ? '✅ ON' : '❌ OFF'}\n`;
       txt += `👥 Users: ${users.length}\n\n`;
-      txt += `*Commands:*\n/memory on|off — global toggle\n/memlist — list users\n/memview <number> — view\n/memedit <number> <field> <value> — edit\n/memdel <number> — delete\n/memoff <number> — disable user\n/memon <number> — enable user`;
+      txt += `*Commands:*\n/memory on|off — global toggle\n/memlist — list users\n/memview <number> — view\n/analyzememory [number] — run AI analysis\n/memedit <number> <field> <value> — edit\n/memdel <number> — delete\n/memoff <number> — disable user\n/memon <number> — enable user`;
       await reply(message, txt, client);
       return true;
     }
@@ -748,12 +761,15 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       }
       let txt = `🧠 *Memory: ${profile.name || key}*\n`;
       txt += `📱 Key: ${key}\n`;
-      txt += `🗣️ Language: ${profile.language || '—'} | 💬 Style: ${profile.style || '—'}\n`;
+      txt += `🗣️ Language: ${memLang(profile.language)} | 💬 Style: ${profile.style || '—'}\n`;
+      if ((profile.habits || []).length) txt += `🔄 Habits: ${profile.habits.join(', ')}\n`;
       if (profile.interests.length) txt += `⭐ Interests: ${profile.interests.join(', ')}\n`;
       if (profile.preferences.length) txt += `👍 Preferences: ${profile.preferences.join('; ')}\n`;
       if (profile.facts.length) txt += `📌 Facts: ${profile.facts.join('; ')}\n`;
       if (profile.notes) txt += `📝 Notes: ${profile.notes}\n`;
       txt += `📅 Last: ${profile.lastInteraction ? new Date(profile.lastInteraction).toLocaleString() : '—'}`;
+      if (profile.lastAnalyzedAt) txt += ` | 🕒 AI analyzed: ${new Date(profile.lastAnalyzedAt).toLocaleString()}`;
+      if (profile.analyzedMessageCount) txt += ` (${profile.analyzedMessageCount} msgs)`;
       await reply(message, txt.substring(0, 1800), client);
       return true;
     }
@@ -774,20 +790,41 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
       await reply(message, `🧠 Memory ${cmd === '/memon' ? 'ENABLED ✅' : 'DISABLED ❌'} for ${param}`, client);
       return true;
     }
+    case '/analyzememory': {
+      // Run AI memory extraction now — /analyzememory [number] (defaults to sender)
+      const memoryService = require('../memory/service');
+      const target = param.trim();
+      const key = target ? memoryService.getUserKey(target) : memoryService.getUserKey(senderId);
+      if (!key) { await reply(message, '❌ Usage: /analyzememory [number]', client); return true; }
+      await reply(message, '🧠 Memory analysis started... (ektu somoy lagbe, AI thakle)', client);
+      const profile = await memoryService.analyzeUserMemory(key);
+      if (!profile) {
+        await reply(message, '⚠️ Analysis complete — no changes. Komporkhe 3+ messages lagbe ebong AI provider active thakte hobe.', client);
+        return true;
+      }
+      let txt = `🧠 *Memory analysis complete:*\n👤 Name: ${profile.name || '—'}\n🗣️ Language: ${memLang(profile.language)} | 💬 Style: ${profile.style || '—'}\n`;
+      if ((profile.habits || []).length) txt += `🔄 Habits: ${profile.habits.join(', ')}\n`;
+      if (profile.interests.length) txt += `⭐ Interests: ${profile.interests.join(', ')}\n`;
+      if (profile.preferences.length) txt += `👍 Preferences: ${profile.preferences.join('; ')}\n`;
+      if (profile.facts.length) txt += `📌 Facts: ${profile.facts.join('; ')}\n`;
+      txt += `📊 Messages analyzed: ${profile.analyzedMessageCount}`;
+      await reply(message, txt.substring(0, 1800), client);
+      return true;
+    }
     case '/memedit': {
       // /memedit <number> <field> <value...>
       // fields: name, language, style, notes | interests(+/-), facts(+/-), preferences(+/-)
       const memoryService = require('../memory/service');
       const parts = param.split(' ').filter(Boolean);
       if (parts.length < 3) {
-        await reply(message, '❌ Usage: /memedit <number> <field> <value>\nFields: name, language, style, notes, interests, facts, preferences\nList fields: interests+ cricket (add) | facts- something (remove)', client);
+        await reply(message, '❌ Usage: /memedit <number> <field> <value>\nFields: name, language, style, notes, interests, facts, preferences, habits\nList fields: interests+ cricket (add) | facts- something (remove)', client);
         return true;
       }
       const key = memoryService.getUserKey(parts[0]);
       const field = parts[1].toLowerCase();
       const value = parts.slice(2).join(' ');
       const baseField = field.replace(/[+-]$/, '');
-      const isListField = ['interests', 'facts', 'preferences'].includes(baseField);
+      const isListField = ['interests', 'facts', 'preferences', 'habits'].includes(baseField);
       if (isListField) {
         const profile = memoryService.getOrCreateProfile(key, parts[0]);
         const list = profile[baseField] || [];

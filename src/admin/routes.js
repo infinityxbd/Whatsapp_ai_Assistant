@@ -11,6 +11,7 @@ const { execSync, spawn } = require('child_process');
 const { readJSON, writeJSON } = require('../storage/store');
 const { requireAuth } = require('./middleware');
 const { softRestart } = require('../bot/restart');
+const { clampChance, clampInt } = require('./clamp');
 
 // ─── Live Log System ───
 // Keep only the last 200 log lines in memory AND on disk so the bot never
@@ -159,12 +160,15 @@ function createRoutes(botState, client) {
       groupWhitelist: Array.isArray(config.groupWhitelist) ? config.groupWhitelist : String(config.groupWhitelist || '').split(',').map(s => s.trim()).filter(Boolean),
       maxRepliesPerMinute: parseInt(config.maxRepliesPerMinute) || 4,
       duplicateReplySec: parseInt(config.duplicateReplySec) || 120,
-      debugDecisionLogs: config.debugDecisionLogs === true
+      debugDecisionLogs: config.debugDecisionLogs === true,
+      // AI User Memory analysis
+      memoryAnalyzeEnabled: config.memoryAnalyzeEnabled !== false,
+      memoryAnalyzeEvery: Math.max(parseInt(config.memoryAnalyzeEvery) || 20, 5)
     });
   });
 
   router.post('/api/settings', (req, res) => {
-    const { botPrompt, replyToInbox, replyToGroups, botName, botAliases, botEnabled, groupPrompt, groupReplyChance, groupCooldownSec, reactionsEnabled, reactionChance, replyToReactions, reactionReplyChance, questionBoostChance, groupSettings, groupAiEnabled, contextMessageLimit, replyActivity, groupWhitelist, maxRepliesPerMinute, duplicateReplySec, debugDecisionLogs } = req.body;
+    const { botPrompt, replyToInbox, replyToGroups, botName, botAliases, botEnabled, groupPrompt, groupReplyChance, groupCooldownSec, reactionsEnabled, reactionChance, replyToReactions, reactionReplyChance, questionBoostChance, groupSettings, groupAiEnabled, contextMessageLimit, replyActivity, groupWhitelist, maxRepliesPerMinute, duplicateReplySec, debugDecisionLogs, memoryAnalyzeEnabled, memoryAnalyzeEvery } = req.body;
     const config = readJSON('config.json') || {};
 
     if (typeof botPrompt === 'string') config.botPrompt = botPrompt;
@@ -174,13 +178,13 @@ function createRoutes(botState, client) {
     if (typeof botAliases === 'string') config.botAliases = botAliases.trim();
     if (typeof botEnabled === 'boolean') config.botEnabled = botEnabled;
     if (typeof groupPrompt === 'string') config.groupPrompt = groupPrompt;
-    if (groupReplyChance !== undefined) config.groupReplyChance = Math.min(Math.max(parseFloat(groupReplyChance) || 0, 1), 1);
+    if (groupReplyChance !== undefined) config.groupReplyChance = clampChance(groupReplyChance);
     if (groupCooldownSec !== undefined) config.groupCooldownSec = Math.max(parseInt(groupCooldownSec) || 0, 0);
     if (typeof reactionsEnabled === 'boolean') config.reactionsEnabled = reactionsEnabled;
-    if (reactionChance !== undefined) config.reactionChance = Math.min(Math.max(parseFloat(reactionChance) || 0, 1), 1);
+    if (reactionChance !== undefined) config.reactionChance = clampChance(reactionChance);
     if (typeof replyToReactions === 'boolean') config.replyToReactions = replyToReactions;
-    if (reactionReplyChance !== undefined) config.reactionReplyChance = Math.min(Math.max(parseFloat(reactionReplyChance) || 0, 0), 1);
-    if (questionBoostChance !== undefined) config.questionBoostChance = Math.min(Math.max(parseFloat(questionBoostChance) || 0, 1), 1);
+    if (reactionReplyChance !== undefined) config.reactionReplyChance = clampChance(reactionReplyChance);
+    if (questionBoostChance !== undefined) config.questionBoostChance = clampChance(questionBoostChance);
     if (groupSettings && typeof groupSettings === 'object') config.groupSettings = groupSettings;
     // Hybrid AI decision flow
     if (typeof groupAiEnabled === 'boolean') config.groupAiEnabled = groupAiEnabled;
@@ -194,6 +198,9 @@ function createRoutes(botState, client) {
     if (maxRepliesPerMinute !== undefined) config.maxRepliesPerMinute = Math.max(parseInt(maxRepliesPerMinute) || 0, 0);
     if (duplicateReplySec !== undefined) config.duplicateReplySec = Math.max(parseInt(duplicateReplySec) || 0, 0);
     if (typeof debugDecisionLogs === 'boolean') config.debugDecisionLogs = debugDecisionLogs;
+    // AI User Memory analysis
+    if (typeof memoryAnalyzeEnabled === 'boolean') config.memoryAnalyzeEnabled = memoryAnalyzeEnabled;
+    if (memoryAnalyzeEvery !== undefined) config.memoryAnalyzeEvery = Math.max(parseInt(memoryAnalyzeEvery) || 20, 5);
 
     writeJSON('config.json', config);
     res.json({ success: true });
@@ -633,7 +640,9 @@ function createRoutes(botState, client) {
             groupWhitelist: [],
             maxRepliesPerMinute: 4,
             duplicateReplySec: 120,
-            debugDecisionLogs: false
+            debugDecisionLogs: false,
+            memoryAnalyzeEnabled: true,
+            memoryAnalyzeEvery: 20
           });
           writeJSON('apikeys.json', []);
           writeJSON('blocklist.json', { numbers: [], groups: [] });
@@ -982,6 +991,20 @@ function createRoutes(botState, client) {
   router.post('/api/memory/:key/clear-short-term', (req, res) => {
     memoryService.clearShortTerm(req.params.key);
     res.json({ success: true });
+  });
+
+  // Analyze memory now (manual button — runs AI extraction immediately)
+  router.post('/api/memory/:key/analyze', async (req, res) => {
+    try {
+      const profile = await memoryService.analyzeUserMemory(req.params.key);
+      if (!profile) {
+        return res.status(400).json({ error: 'Analysis unavailable — not enough conversation or no active AI provider' });
+      }
+      console.log(`🧠 Memory analyzed on demand for ${req.params.key}`);
+      res.json({ success: true, profile });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Start auto-update on boot if enabled

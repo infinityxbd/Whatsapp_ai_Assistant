@@ -7,7 +7,13 @@ const BaseProvider = require('./base');
 
 class AnthropicProvider extends BaseProvider {
   getEndpoint() {
-    return (this.endpoint || 'https://api.anthropic.com').replace(/\/+$/, '') + '/v1/messages';
+    // Anthropic's documented API URL is https://api.anthropic.com/v1/messages.
+    // If the user configured the FULL path, don't append it a second time.
+    let base = (this.endpoint || 'https://api.anthropic.com').replace(/\/+$/, '');
+    if (base.endsWith('/v1/messages')) return base;
+    // Users sometimes configure the base path '.../v1' instead of the bare host.
+    if (base.endsWith('/v1')) return base + '/messages';
+    return base + '/v1/messages';
   }
 
   getHeaders() {

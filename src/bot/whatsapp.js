@@ -170,6 +170,16 @@ function scheduleReconnect() {
       }
       botState.status = 'offline';
       qrShown = false; // log a fresh QR if the session expired
+      // whatsapp-web.js requires the old client to be destroyed before
+      // re-initializing — otherwise initialize() throws "already initialized"
+      // and the in-process reconnect never recovers (only the watchdog would).
+      // Re-check status right before destroying: the client may have recovered
+      // on its own while we were waiting, and we must not kill a live session.
+      if (botState.status === 'online') {
+        reconnectDelay = 10000;
+        return;
+      }
+      try { await client.destroy(); } catch (e) {}
       await client.initialize();
       reconnectDelay = 10000;
       console.log('✅ Reconnect attempt finished');
