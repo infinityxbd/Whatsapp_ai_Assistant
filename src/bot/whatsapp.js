@@ -5,6 +5,7 @@
  */
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const { handleMessage } = require('./handler');
+const { autoClean } = require('./cache');
 const { execSync } = require('child_process');
 const path = require('path');
 
@@ -305,30 +306,11 @@ client.on('ready', async () => {
     }
   } catch (e) {}
 
-  // Periodic cache auto-clean every 15 min (keeps the browser from sleeping)
+  // Periodic cache auto-clean every 15 min (keeps the browser from sleeping).
+  // Runs only when there is actually a cache to clean.
   if (global._cacheCleanInterval) clearInterval(global._cacheCleanInterval);
   global._cacheCleanInterval = setInterval(() => {
-    try {
-      const fs = require('fs');
-      const p = require('path');
-      const cacheDir = p.join(__dirname, '..', '..', '.wwebjs_cache');
-      if (fs.existsSync(cacheDir)) { fs.rmSync(cacheDir, { recursive: true, force: true }); }
-      const sessionDir = p.join(__dirname, '..', '..', '.wwebjs_auth', 'session');
-      if (fs.existsSync(sessionDir)) {
-        for (const folder of ['Cache', 'Code Cache', 'GPUCache', 'Service Worker', 'Blob_storage']) {
-          const fp = p.join(sessionDir, folder);
-          if (fs.existsSync(fp)) { try { fs.rmSync(fp, { recursive: true, force: true }); } catch (e) {} }
-        }
-        const defaultDir = p.join(sessionDir, 'Default');
-        if (fs.existsSync(defaultDir)) {
-          for (const folder of ['Cache', 'Code Cache', 'GPUCache', 'Service Worker', 'Blob_storage']) {
-            const fp = p.join(defaultDir, folder);
-            if (fs.existsSync(fp)) { try { fs.rmSync(fp, { recursive: true, force: true }); } catch (e) {} }
-          }
-        }
-      }
-      console.log('🧹 Auto cache clean done');
-    } catch (e) {}
+    try { autoClean(); } catch (e) {}
   }, 15 * 60 * 1000);
 
   if (onlineInterval) clearInterval(onlineInterval);

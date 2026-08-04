@@ -10,6 +10,7 @@ const path = require('path');
 const { execSync, spawn } = require('child_process');
 const { readJSON, writeJSON } = require('../storage/store');
 const { requireAuth } = require('./middleware');
+const { softRestart } = require('../bot/restart');
 
 // ─── Live Log System ───
 // Keep only the last 200 log lines in memory AND on disk so the bot never
@@ -55,8 +56,9 @@ let autoUpdateTimer = null;
 function startAutoUpdate() {
   stopAutoUpdate();
   const config = readJSON('config.json') || {};
-  if (!config.autoUpdate) return;
-  const interval = (config.autoUpdateInterval || 30) * 60 * 1000;
+  // Enabled by default; can be turned off from the admin panel
+  if (config.autoUpdate === false) return;
+  const interval = (config.autoUpdateInterval || 1440) * 60 * 1000;
   autoUpdateTimer = setInterval(async () => {
     try {
       const cwd = path.join(__dirname, '..', '..');
@@ -750,17 +752,10 @@ function createRoutes(botState, client) {
     res.json({ success: true, count: messages.length });
   });
 
-  // ─── Soft Restart (keeps session + API keys) ───
+  // ─── Soft Restart (keeps session + API keys + all data) ───
   router.post('/api/soft-restart', (req, res) => {
     res.json({ success: true, message: 'Restarting bot...' });
-    console.log('🔄 Soft restart triggered from admin panel');
-    setTimeout(() => {
-      try { client.destroy(); } catch (e) {}
-      const cwd = path.join(__dirname, '..', '..');
-      const child = spawn('node', ['index.js'], { detached: true, stdio: 'ignore', cwd });
-      child.unref();
-      process.exit(0);
-    }, 800);
+    softRestart(client, 'admin panel');
   });
 
   // ─── Live Logs (SSE) ───
@@ -809,12 +804,12 @@ function createRoutes(botState, client) {
     }, 500);
   });
 
-  // ─── Auto-Update Toggle ───
+  // ─── Auto-Update Toggle (default: enabled, checks every 24h) ───
   router.get('/api/auto-update', (req, res) => {
     const config = readJSON('config.json') || {};
     res.json({
-      enabled: config.autoUpdate === true,
-      interval: config.autoUpdateInterval || 30
+      enabled: config.autoUpdate !== false,
+      interval: config.autoUpdateInterval || 1440
     });
   });
 
@@ -826,8 +821,8 @@ function createRoutes(botState, client) {
     writeJSON('config.json', config);
     if (config.autoUpdate) startAutoUpdate();
     else stopAutoUpdate();
-    console.log(`🔄 Auto-update ${config.autoUpdate ? 'enabled (' + (config.autoUpdateInterval || 30) + 'min)' : 'disabled'}`);
-    res.json({ success: true, enabled: config.autoUpdate, interval: config.autoUpdateInterval || 30 });
+    console.log(`🔄 Auto-update ${config.autoUpdate ? 'enabled (' + (config.autoUpdateInterval || 1440) + 'min)' : 'disabled'}`);
+    res.json({ success: true, enabled: config.autoUpdate, interval: config.autoUpdateInterval || 1440 });
   });
 
   // Start auto-update on boot if enabled

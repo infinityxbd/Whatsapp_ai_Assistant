@@ -708,7 +708,7 @@
         </div>
         <div style="margin-top:16px;">
           <label>Check Interval (minutes)</label>
-          <input type="number" id="autoUpdateInterval" min="5" max="1440" value="30" style="width:120px;" onchange="saveAutoUpdate()">
+          <input type="number" id="autoUpdateInterval" min="5" max="1440" value="1440" style="width:120px;" onchange="saveAutoUpdate()">
         </div>
       </div>
     </div>
@@ -1127,7 +1127,7 @@
 
     async function toggleAutoUpdate() {
       const enabled = document.getElementById('toggleAutoUpdate').checked;
-      const interval = parseInt(document.getElementById('autoUpdateInterval').value) || 30;
+      const interval = parseInt(document.getElementById('autoUpdateInterval').value) || 1440;
       try {
         await fetch('/admin/api/auto-update', {
           method: 'POST', credentials: 'same-origin',
@@ -1140,7 +1140,7 @@
 
     async function saveAutoUpdate() {
       const enabled = document.getElementById('toggleAutoUpdate').checked;
-      const interval = parseInt(document.getElementById('autoUpdateInterval').value) || 30;
+      const interval = parseInt(document.getElementById('autoUpdateInterval').value) || 1440;
       try {
         await fetch('/admin/api/auto-update', {
           method: 'POST', credentials: 'same-origin',
