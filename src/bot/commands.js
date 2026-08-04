@@ -50,15 +50,18 @@ async function reply(message, text, client) {
   }
 }
 
-// Show WHO sent an unsent message: the name when available, otherwise the
-// real phone number (LID IDs get resolved so they are recognizable).
+// Show WHO sent an unsent message: the sender display name when available,
+// otherwise the real phone number (LID IDs get resolved so they are
+// recognizable).
 async function resolveUnsentWho(u, lidMap) {
   // Group unsent — show the group, and who unsent it when known.
   if (u.type === 'group') {
-    const group = u.name ? `👥 ${u.name}` : `👥 Group ${cleanId(u.from)}`;
-    if (u.author) {
-      const a = cleanId(u.author);
-      const aDigits = String(u.author || '').replace(/\D/g, '');
+    const group = u.name ? `👥 ${u.name}` : `👥 Group ${cleanId(u.chatId || u.from || '')}`;
+    if (u.senderName) return `${group} — 🚫 unsent by ${u.senderName}`;
+    const author = u.author || u.sender;
+    if (author) {
+      const a = cleanId(author);
+      const aDigits = String(author || '').replace(/\D/g, '');
       let who = a;
       if (lidMap && lidMap[a]) who = lidMap[a];
       else if (lidMap && lidMap[aDigits] && lidMap[aDigits] !== a) who = lidMap[aDigits];
@@ -67,10 +70,11 @@ async function resolveUnsentWho(u, lidMap) {
     return group;
   }
 
+  if (u.senderName) return `👤 ${u.senderName}`;
   if (u.name) return `👤 ${u.name}`;
 
-  const clean = cleanId(u.from);
-  const digits = String(u.from || '').replace(/\D/g, '');
+  const clean = cleanId(u.sender || u.from || '');
+  const digits = String(u.sender || u.from || '').replace(/\D/g, '');
 
   // In-memory LID map first (fast)
   if (lidMap) {
@@ -81,7 +85,7 @@ async function resolveUnsentWho(u, lidMap) {
   // Fallback: resolve LID → real phone via client
   try {
     const { resolveLid } = require('./whatsapp');
-    const phone = await resolveLid(u.from);
+    const phone = await resolveLid(u.sender || u.from || '');
     if (phone) return `👤 ${phone}`;
   } catch (e) {}
 
@@ -313,9 +317,10 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
     }
 
     // ─── Unsent Messages ───
-    // Shows messages the bot did NOT reply to (blocked senders, blocked
-    // groups, muted/archived chats). Buffer is capped at 30 (auto-clean).
-    // Sender shown as name (if available) else real phone number.
+    // Shows ONLY messages that were actually deleted/unsent in WhatsApp
+    // (real "Delete for everyone" revoke events). Normal messages — replied,
+    // blocked, muted or archived — are never recorded here. Buffer is capped
+    // at 30 (auto-clean). Newest unsent first.
     //   /unsent            → last 10, both inbox + group
     //   /unsent <n>          → last n (max 30), both
     //   /unsentin [n]        → last n inbox (private) only
@@ -335,9 +340,10 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
         const out = [];
         for (let i = 0; i < arr.length; i++) {
           const u = arr[i];
-          const time = u.time ? new Date(u.time).toLocaleString() : '';
+          const sent = u.originalTs ? new Date(u.originalTs).toLocaleString() : '';
+          const deleted = u.deletedTs ? new Date(u.deletedTs).toLocaleString() : '';
           const who = await resolveUnsentWho(u, lidMap);
-          out.push(`${i + 1}. ${who}\n   📅 ${time}\n   💬 ${String(u.body || '').slice(0, 80)}`);
+          out.push(`${i + 1}. 🚫 ${who}\n   🕐 Sent: ${sent}\n   🗑️ Deleted: ${deleted}\n   💬 ${String(u.body || '').slice(0, 80)}`);
         }
         return out;
       };

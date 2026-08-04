@@ -390,8 +390,10 @@ client.on('message_create', async (message) => {
 // ─── Unsent (revoked) message tracking ───
 // whatsapp-web.js only keeps the LAST seen message, so for a message unsent
 // minutes later it hands us a revoke event with NO original text. We keep our
-// own rolling cache of recent messages (id → content) so we can recover the
-// original body of ANY unsent message — new or old — and log it to /unsent.
+// own rolling cache of every received message (id → content) so the original
+// body of ANY unsent message can be recovered — new or old. The cache is
+// purely an index for recovery: messages are NEVER recorded as unsent just
+// because they are in this cache. Only real revoke events create records.
 const recentMessages = new Map();
 const RECENT_MSG_LIMIT = 2000;
 
@@ -404,6 +406,7 @@ function cacheRecentMessage(message) {
       author: message.author || message.from,
       body: message.body || '',
       timestamp: message.timestamp,
+      msgType: message.type || 'chat',
       type: String(message.from || '').endsWith('@g.us') ? 'group' : 'inbox'
     });
     // Trim oldest entries when the cache grows too large
@@ -414,10 +417,11 @@ function cacheRecentMessage(message) {
   } catch (e) {}
 }
 
-// Log an unsent (deleted for everyone) message into the /unsent buffer.
-// Works for BOTH freshly-sent and old messages: the library's `revokedMsg`
-// only carries the original text when the message was the last one seen, so
-// we fall back to our own recent-message cache, then to chat history lookup.
+// Record an ACTUALLY deleted-for-everyone message into /unsent.
+// This handler is only ever invoked by the library's message_revoke_everyone
+// event (real "Delete for everyone"), never for normal messages. Age of the
+// message is irrelevant — a message unsent 5 minutes (or longer) after being
+// sent is matched by its original WhatsApp message ID.
 client.on('message_revoke_everyone', async (message, revokedMsg) => {
   try {
     // Never track the bot's OWN unsent messages
@@ -426,19 +430,28 @@ client.on('message_revoke_everyone', async (message, revokedMsg) => {
     const mid = (message.id && (message.id._serialized || message.id.id)) || '';
     const isGroup = String(message.from || '').endsWith('@g.us');
 
-    // 1) Prefer the library's revokedMsg (original data, only for last-seen msg)
-    // 2) Else our rolling cache (any message seen recently)
-    // 3) Else try to fetch the original from the page store / chat history
+    console.log(`🚫 Actual revoke event received — counting as UNSENT (${isGroup ? 'group' : 'inbox'})`);
+
+    // Recover the original message. Order:
+    // 1) The library's revokedMsg (original data — only for the last-seen msg)
+    // 2) Our rolling recent-message cache (any message seen recently, old or new)
+    // 3) Best-effort fetch from the page store before it is fully cleared
     let body = '';
     let from = message.from;
     let author = message.author || message.from;
     let timestamp = message.timestamp;
+    let msgType = message.type || 'chat';
 
+    // NOTE: by the time the revoke event fires, the store message's type is
+    // already 'revoked' and its body cleared — so we ONLY trust revokedMsg
+    // when it still carries real content. Our rolling cache always holds the
+    // ORIGINAL body, so it is the primary recovery source for old deletes.
     if (revokedMsg && revokedMsg.body) {
       body = revokedMsg.body;
       from = revokedMsg.from || from;
       author = revokedMsg.author || revokedMsg.from || author;
       timestamp = revokedMsg.timestamp || timestamp;
+      msgType = (revokedMsg.type && revokedMsg.type !== 'revoked') ? revokedMsg.type : msgType;
     } else if (mid) {
       const cached = recentMessages.get(mid);
       if (cached) {
@@ -446,17 +459,17 @@ client.on('message_revoke_everyone', async (message, revokedMsg) => {
         from = cached.from || from;
         author = cached.author || author;
         timestamp = cached.timestamp || timestamp;
+        msgType = cached.msgType || msgType;
       }
     }
     if (!body) {
-      // Old message with no cached copy — fetch its body from the page store
-      // before it's fully cleared (best effort).
+      // Old message with no cached copy — fetch from the page store (best effort).
       try {
         const fetched = await client.pupPage.evaluate((id) => {
           try {
             const Msg = window.require('WAWebCollections').Msg;
             const m = Msg.get(id);
-            if (m) return { body: m.body || m.rawObj?.body || '', from: m.id?._serialized || '', author: m.author?._serialized || m.author || '', timestamp: m.t };
+            if (m) return { body: m.body || m.rawObj?.body || '', from: m.id?._serialized || '', author: m.author?._serialized || m.author || '', timestamp: m.t, type: m.type || '' };
           } catch (e) {}
           return null;
         }, mid);
@@ -465,26 +478,50 @@ client.on('message_revoke_everyone', async (message, revokedMsg) => {
           if (fetched.from) from = fetched.from;
           if (fetched.author) author = fetched.author;
           if (fetched.timestamp) timestamp = fetched.timestamp;
+          if (fetched.type && fetched.type !== 'revoked') msgType = fetched.type;
         }
       } catch (e) {}
     }
 
-    let name = '';
+    // Sender display name (best effort: pushname → saved name → number)
+    let senderName = '';
     try {
-      const chat = await client.getChatById(message.from);
-      name = chat.name || '';
+      const contact = await client.getContactById(author || from);
+      senderName = contact.pushname || contact.name || contact.shortName || contact.number || '';
     } catch (e) {}
 
-    saveUnsent({
+    // Chat display name (group name) for friendlier /unsent output
+    let chatName = '';
+    try {
+      const chat = await client.getChatById(message.from);
+      chatName = chat.name || '';
+    } catch (e) {}
+
+    const result = saveUnsent({
       msgId: mid,
-      from: isGroup ? message.from : author,
-      author: isGroup ? author : '',
-      name: isGroup ? name : '',
-      time: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString(),
+      chatId: message.from,
+      type: isGroup ? 'group' : 'inbox',
+      sender: author,
+      senderName,
+      name: isGroup ? chatName : '',
       body: body || '[Unsent message — content unavailable]',
-      type: isGroup ? 'group' : 'inbox'
+      msgType,
+      originalTs: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString(),
+      deletedTs: new Date().toISOString(),
+      status: 'UNSENT'
     });
-    console.log(`🚫 Unsent message logged (${isGroup ? 'group' : 'inbox'}) from ${author}: "${String(body).slice(0, 60)}"`);
+
+    if (result.duplicate) {
+      console.log(`🔁 Duplicate revoke event ignored (already recorded): ${mid}`);
+      return;
+    }
+
+    if (body) {
+      console.log(`🎯 Matched original message ID: ${mid}`);
+    } else {
+      console.log(`⚠️ Unmatched revoke event — original content unavailable for ID: ${mid}`);
+    }
+    console.log(`🚫 UNSENT saved (${isGroup ? 'group' : 'inbox'}) from ${senderName || author}: "${String(body).slice(0, 60)}"`);
   } catch (e) {
     console.error('❌ Revoke handling error:', e.message);
   }

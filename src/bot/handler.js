@@ -6,7 +6,6 @@
 const aiService = require('../ai/service');
 const { readJSON } = require('../storage/store');
 const { handleCommand } = require('./commands');
-const { saveUnsent } = require('./unsent');
 const memoryService = require('../memory/service');
 
 const MAX_HISTORY = 7;
@@ -106,26 +105,6 @@ async function isBlocked(message, client) {
   }
 
   return false;
-}
-
-// Persist a message that will NOT get an AI reply (blocked sender, blocked
-// group, or muted/archived chat) into the rolling unsent buffer so the owner
-// can review it via /unsent. Both inbox (private) and group messages are kept.
-async function saveUnsentMessage(message, isGroup) {
-  let name = '';
-  try { name = (await message.getChat()).name || ''; } catch (e) {}
-  try {
-    saveUnsent({
-      msgId: (message.id && (message.id._serialized || message.id.id)) || '',
-      from: message.from,
-      name,
-      time: new Date().toISOString(),
-      body: message.body || '',
-      type: isGroup ? 'group' : 'inbox'
-    });
-  } catch (e) {
-    console.error('❌ saveUnsent failed:', e.message);
-  }
 }
 
 function isEmojiOnly(text) {
@@ -241,10 +220,12 @@ async function handleMessage(message, client) {
     }
 
     // ─── Incoming messages: muted/archived check ───
+    // NOTE: blocked/muted/archived messages are NORMAL messages, not unsent
+    // ones. They are logged here for the owner but NEVER written to /unsent
+    // (only genuine WhatsApp revoke events are recorded there).
     const chatCheck = await checkMutedArchived(message.from, client);
     if (chatCheck) {
-      console.log(`🔇 Skipping ${chatCheck} chat: ${message.from}`);
-      await saveUnsentMessage(message, isGroup);
+      console.log(`🔇 Skipping ${chatCheck} chat: ${message.from} — normal message, NOT counted as unsent`);
       return;
     }
 
@@ -263,11 +244,11 @@ async function handleMessage(message, client) {
       if (!isGroup && !config.replyToInbox) return;
 
       if (blocklist.numbers.length > 0 && await isBlocked(message, client)) {
-        await saveUnsentMessage(message, isGroup);
+        console.log(`⛔ Blocked sender message ignored — normal message, NOT counted as unsent`);
         return;
       }
       if (isGroup && blocklist.groups.some(g => cleanId(g) === cleanId(message.from))) {
-        await saveUnsentMessage(message, isGroup);
+        console.log(`⛔ Blocked group message ignored — normal message, NOT counted as unsent`);
         return;
       }
       if (config.botEnabled === false) return;
