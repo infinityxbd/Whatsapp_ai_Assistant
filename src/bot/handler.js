@@ -195,6 +195,7 @@ async function buildGroupDecisionContext(message, client, botState, config, chat
     botNames: [],
     isReplyToBot: !!(signals && signals.isReplyToBot),
     continuation: !!(signals && signals.continuation),
+    likelyBotName: !!(signals && signals.likelyBotName),
     participantNames: [],
     quotedText: '',
     quotedAuthor: '',
@@ -412,12 +413,14 @@ async function handleMessage(message, client) {
           doReply = false;
         } else if (groupAiOn) {
           // Tier 4: unclear message → ask the main AI (with full context) to
-          // decide. Anti-spam gates run BEFORE the AI call to save tokens.
-          // A genuine continuation of the bot's own last message ("kemon?") is
-          // allowed through the cooldown so natural back-and-forth survives;
-          // the per-minute rate limit still acts as the anti-spam backstop.
+          // decide. Only 100%-obvious filler is skipped locally; anything else
+          // (including low-confidence messages) reaches the AI. Messages with a
+          // likely bot-name typo/variation are never locally ignored. Anti-spam
+          // gates still run before the AI call to save tokens, and a genuine
+          // continuation of the bot's own last message ("kemon?") is allowed
+          // through the cooldown so natural back-and-forth survives.
           processingType = 'context_ai';
-          if (gIntel.isLowContent(userMsg)) {
+          if (gIntel.isObviousFiller(userMsg) && !signals.likelyBotName && !gIntel.isGreeting(userMsg)) {
             doReply = false;
           } else if (!gIntel.withinReplyRate(chatId, config.maxRepliesPerMinute)) {
             doReply = false;

@@ -70,6 +70,91 @@ function isLowContent(text) {
   return false;
 }
 
+// STRICT filler check used before spending an AI call on an UNCERTAIN message.
+// Only 100%-obvious filler/spam is locally ignored: empty, emoji-only, "ok",
+// "k", "ha", a standalone "hmm", or 1-2 words from the tiny set below.
+// Anything else — even low-confidence/uncertain messages — must go to the main
+// AI for a decision (the local detector is NOT allowed to skip it).
+const OBVIOUS_FILLER = new Set([
+  'ok', 'okay', 'k', 'kk', 'kek', 'hmm', 'hm', 'hmmm', 'ha', 'na', 'haha', 'lol',
+  'lmao', 'oh', 'oho', 'aha', 'yes', 'no', 'yep', 'yeah', 'nope', 'thik', 'theek',
+  'acha', 'accha', 'done', 'fine', 'sure', 'wow', 'arre', 'are'
+]);
+
+function isObviousFiller(text) {
+  const t = String(text || '').trim();
+  if (t.length === 0) return true;
+  if (isEmojiOnly(t)) return true;
+  // Short strings only count when they are literally in the filler set ("ok",
+  // "k", "ha", "na"...). A standalone 2-char word like "ki" ("what?") or
+  // casual "re"/"ja" is NOT 100% obvious filler and must reach the AI.
+  if (t.length <= 2) return OBVIOUS_FILLER.has(t.toLowerCase());
+  const words = t.toLowerCase().replace(/[!?.,।]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  if (words.length <= 2 && words.every(w => OBVIOUS_FILLER.has(w))) return true;
+  return false;
+}
+
+// Classic Levenshtein distance (short strings only — bot names are tiny).
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    let cur = [i, ...Array(n).fill(0)];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev.splice(0, prev.length, ...cur);
+  }
+  return prev[n];
+}
+
+// Common short suffixes appended to a name in Bangla romanization, especially
+// the genitive marker: "Suraiyar" = "Suraiya" + "r" ("Suraiya's").
+const NAME_APPEND = new Set(['r', 'er', 're', 'ke', 'ar', 'or', 'e', 'a', 'i', 'y', 's', 'es']);
+
+// Fuzzy bot-name detection: catches spelling variations and typos that the
+// exact matcher (hasBotName) would miss — e.g. Suraiya → Suraia, Suraiyar.
+// Matching is case-insensitive and tolerant of one typo (two for longer names)
+// or a common Bangla suffix. This is a WEAK signal: it never forces a reply,
+// it only makes sure such a message reaches the main AI instead of being
+// locally ignored.
+function hasLikelyBotName(text, config) {
+  const t = String(text || '').toLowerCase();
+  if (!t) return false;
+  const tokens = t.split(/[^a-z0-9]+/i).filter(Boolean);
+  if (!tokens.length) return false;
+  for (const name of getBotNames(config)) {
+    const n = name.toLowerCase();
+    if (n.length < 3) continue;
+    for (const tok of tokens) {
+      let word = tok.replace(/^@/, '');
+      if (word.length < 3) continue;
+      if (word === n) continue; // exact match is hasBotName's job
+      // Genitive / common appended suffix: "suraiyar" starts with "suraiya"
+      if (word.length > n.length && word.startsWith(n) && NAME_APPEND.has(word.slice(n.length))) return true;
+      // Typo tolerance via edit distance — ONLY for names >= 5 chars. Short
+      // names ("Rafi") are prefixes of many real names ("Rafiq", "Rahim") and
+      // would false-positive; their typos are caught by the suffix rule above.
+      if (n.length >= 5) {
+        const maxDist = n.length >= 6 ? 2 : 1;
+        if (Math.abs(word.length - n.length) <= maxDist && levenshtein(word, n) <= maxDist) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// True when the bot's OWN reply appears within the last few history entries —
+// the user is likely following up on it ("Accha tui koros ta ki?", "Kire,
+// kos na kere"). Used as a soft hint for the main AI, never a hard decision.
+function hasRecentBotReply(history) {
+  const recent = (history || []).slice(-3);
+  return recent.some(e => e && e.role === 'model');
+}
+
 // Human-like delay: time to "read" + time to "type" the reply.
 // Longer messages take longer to type, capped so active groups stay snappy.
 function naturalDelay(text, isGroup = true) {
@@ -309,10 +394,11 @@ function shouldRandomReply(chatId, config, userMsg) {
   return Math.random() < chance;
 }
 
-// Word-boundary aware regex for the bot's name in text ("Rafi,", "@Rafi", "Rafi!").
+// Word-boundary aware regex for the bot's name in text ("Rafi,", "@Rafi",
+// "Rafi!", "Rafi-"). Case-insensitive per spec.
 function buildBotNameRe(botName) {
   const name = String(botName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp('(?:^|\\s|@)' + name + '(?=\\s|[,.;:!?]|$)', 'i');
+  return new RegExp('(?:^|\\s|@)' + name + '(?=\\s|[,.;:!?।\\-()]|$)', 'i');
 }
 
 // True when the message uses the bot's name about the SENDER in first person
@@ -474,6 +560,10 @@ async function classifyGroupMessage(message, client, botState, config, ctx = {})
 
   const isReaction = isEmojiOnly(body);
   const hasName = hasBotName(body, config);
+  // Weak bot-name signal: a likely typo/variation ("Suraia", "Suraiyar" for
+  // "Suraiya"). Never forces a reply — only routes the message to the main AI
+  // so the AI can decide instead of the local detector ignoring it.
+  const likelyBotName = !hasName && hasLikelyBotName(body, config);
   const isSelfCorrection = isSelfReferenceIdentity(body, config);
   const isGroupWide = isGroupAddressed(body);
   const isQ = isQuestion(body);
@@ -533,12 +623,12 @@ async function classifyGroupMessage(message, client, botState, config, ctx = {})
       // is being called, and casual words like "tui"/"koi"/"re"/"ja" never
       // mean the message is for the bot. Whether the user is continuing a
       // conversation with the bot or chatting with another member is left to
-      // the main AI, which sees the full context. The "last message was the
-      // bot's" fact is passed only as a soft hint (continuation) for the AI.
-      const lastEntry = history[history.length - 1];
-      continuation = !!(lastEntry && lastEntry.role === 'model');
+      // the main AI, which sees the full context. A likely bot-name typo bumps
+      // the confidence a little but still goes to the AI for a decision — low
+      // confidence alone never causes a local skip.
+      continuation = hasRecentBotReply(history);
       target = 'unknown';
-      confidence = 0.3;
+      confidence = likelyBotName ? 0.45 : 0.3;
       shouldReply = false;
     }
   }
@@ -547,11 +637,12 @@ async function classifyGroupMessage(message, client, botState, config, ctx = {})
     isReplyToBot,
     isMentioned,
     hasBotName: hasName,
+    likelyBotName,   // weak: typo/variation of the bot's name → route to AI
     isReaction,
     isSelfCorrection,
     isGroupWide,
     target,          // 'bot' | 'group' | 'specific_user' | 'unknown'
-    intent,          // 'question' | 'greeting' | 'correction' | 'reaction' | 'casual'
+    intent,          // 'question' | 'open_question' | 'greeting' | 'correction' | 'reaction' | 'casual'
     shouldReply,     // whether the message deserves a reply (chance applied by caller)
     confidence,      // 0..1
     continuation     // true when recent-context continuation with the bot
@@ -586,6 +677,9 @@ module.exports = {
   pickReactionEmoji,
   isEmojiOnly,
   isLowContent,
+  isObviousFiller,
+  hasLikelyBotName,
+  hasRecentBotReply,
   naturalDelay,
   markReplied,
   withinCooldown,
