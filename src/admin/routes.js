@@ -11,6 +11,7 @@ const { execSync, spawn } = require('child_process');
 const { readJSON, writeJSON } = require('../storage/store');
 const { requireAuth } = require('./middleware');
 const { softRestart } = require('../bot/restart');
+const { cleanupForStart } = require('../bot/cache');
 const { clampChance, clampInt } = require('./clamp');
 
 // ─── Live Log System ───
@@ -398,9 +399,9 @@ function createRoutes(botState, client) {
       try { await client.destroy(); } catch (e) {}
       botState.status = 'offline';
       await new Promise(r => setTimeout(r, 2000));
-      try { await client.initialize(); } catch (e) {
-        return res.status(500).json({ error: 'Failed to restart client: ' + e.message });
-      }
+      try { await cleanupForStart(); } catch (e) {}
+      const { safeInitialize } = require('../bot/whatsapp');
+      await safeInitialize();
     }
 
     // Wait up to 20s for client to be ready
@@ -461,7 +462,13 @@ function createRoutes(botState, client) {
       try { await client.destroy(); } catch (e) {}
       botState.status = 'offline';
       await new Promise(r => setTimeout(r, 2000));
-      await client.initialize();
+      // Make sure the profile is fully unlocked before relaunching the browser
+      try { await cleanupForStart(); } catch (e) {}
+      const { safeInitialize } = require('../bot/whatsapp');
+      const ok = await safeInitialize();
+      if (!ok) {
+        return res.status(500).json({ error: 'Restart timed out. Try again in a moment.' });
+      }
       console.log('🔄 WhatsApp client restarted');
       res.json({ success: true });
     } catch (e) {
@@ -652,7 +659,7 @@ function createRoutes(botState, client) {
           console.error('❌ Failed to recreate data files:', e.message);
         }
 
-        try { await client.initialize(); } catch (e) {
+        try { await require('../bot/whatsapp').safeInitialize(); } catch (e) {
           console.error('❌ Reinit after reset failed:', e.message);
         }
       }, 3000);

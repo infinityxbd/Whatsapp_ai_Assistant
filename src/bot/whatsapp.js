@@ -7,6 +7,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const { handleMessage } = require('./handler');
 const { autoClean } = require('./cache');
 const { saveUnsent } = require('./unsent');
+const { markBotOnline } = require('./restart');
 const { execSync } = require('child_process');
 const path = require('path');
 
@@ -139,11 +140,31 @@ const client = new Client({
   puppeteer: puppeteerConfig,
 });
 
-const botState = { status: 'offline', startTime: null, botWid: null, lidMap: {}, lastOnline: null };
+const botState = { status: 'offline', startTime: null, initStartedAt: null, botWid: null, lidMap: {}, lastOnline: null };
 
 function setBotStatus(status) {
   botState.status = status;
   if (status === 'online') botState.startTime = Date.now();
+}
+
+// Initialize the WhatsApp client without ever hanging the caller. The library
+// launches Chrome with page.goto(..., timeout: 0), which blocks forever when
+// the session profile is locked/corrupt. Raced against a timeout here so the
+// process can never get stuck, and the watchdog can restart a stuck session.
+async function safeInitialize(timeoutMs = 150000) {
+  botState.initStartedAt = Date.now();
+  try {
+    await Promise.race([
+      client.initialize(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('initialize timed out')), timeoutMs)
+      )
+    ]);
+    return true;
+  } catch (e) {
+    console.error(`❌ Client init error: ${e.message}`);
+    return false;
+  }
 }
 
 let onlineInterval = null;
@@ -180,7 +201,13 @@ function scheduleReconnect() {
         return;
       }
       try { await client.destroy(); } catch (e) {}
-      await client.initialize();
+      const ok = await safeInitialize();
+      if (!ok) {
+        // Init hung/timed out — kill the half-launched browser so the next
+        // attempt can initialize cleanly, then back off and retry.
+        try { await client.destroy(); } catch (e) {}
+        throw new Error('initialize failed');
+      }
       reconnectDelay = 10000;
       console.log('✅ Reconnect attempt finished');
     } catch (e) {
@@ -337,6 +364,10 @@ client.on('ready', async () => {
   botState.status = 'online';
   botState.startTime = Date.now();
   botState.lastOnline = Date.now();
+  botState.initStartedAt = null;
+  // A successful connection clears the consecutive-restart counter, so a
+  // healthy session never trips the auto-restart safety cap.
+  try { markBotOnline(); } catch (e) {}
   // Cancel any pending reconnect so we never double-initialize a live client
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   reconnecting = false;
@@ -537,4 +568,4 @@ client.on('message_revoke_everyone', async (message, revokedMsg) => {
   }
 });
 
-module.exports = { client, botState, setBotStatus, resolveLid };
+module.exports = { client, botState, setBotStatus, resolveLid, safeInitialize };

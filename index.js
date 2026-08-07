@@ -22,8 +22,8 @@ require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const { readJSON, writeJSON } = require('./src/storage/store');
 const createAdminServer = require('./src/admin/server');
-const { autoClean } = require('./src/bot/cache');
-const { softRestart } = require('./src/bot/restart');
+const { cleanupForStart } = require('./src/bot/cache');
+const { softRestart, recordRestartAttempt, autoRestartBlocked } = require('./src/bot/restart');
 
 async function initDataFiles() {
   let config = readJSON('config.json');
@@ -88,7 +88,11 @@ async function initDataFiles() {
 }
 
 async function main() {
-  autoClean();
+  // Full startup cleanup: kill any leftover Chrome from a previous instance,
+  // unlock the session profile and wipe stale caches BEFORE the browser
+  // launches. This is what prevents the "authenticated but contacts never
+  // load / bot never goes online" state after a soft restart.
+  try { await cleanupForStart(); } catch (e) {}
 
   console.log('\n' + '═'.repeat(55));
   console.log('   🤖 WhatsApp AI Auto-Reply Bot');
@@ -108,8 +112,13 @@ async function main() {
   // ─── Auto soft restart every 1 hour (keeps session + all data) ───
   const autoRestartHours = parseFloat(process.env.AUTO_RESTART_HOURS) || 1;
   const autoRestartInterval = autoRestartHours * 60 * 60 * 1000;
+  let lastRestartAt = 0;
+  let blockedLogged = false;
   setInterval(() => {
     if (botState.status !== 'online') return;
+    if (autoRestartBlocked()) return;
+    lastRestartAt = Date.now();
+    recordRestartAttempt();
     console.log('⏰ Hourly auto soft restart triggered');
     softRestart(client, 'hourly auto-restart');
   }, autoRestartInterval);
@@ -121,6 +130,11 @@ async function main() {
   //      (e.g. a browser crash the auto-reconnect could not recover).
   //   2. The bot claims to be online but the browser page is actually
   //      unresponsive (silent freeze — no message events anymore).
+  //   3. The bot never reached online after starting (stuck at the loading
+  //      screen — "authenticated but contacts don't load"). This is the
+  //      post-soft-restart "sleep mode" nobody could recover from before.
+  // The consecutive-restart counter (reset on every successful online) makes
+  // sure a genuinely broken session never causes an endless restart loop.
   // ─── User Memory System: prune inactive profiles daily ───
   setInterval(() => {
     try { require('./src/memory/service').prune(); } catch (e) {}
@@ -129,10 +143,27 @@ async function main() {
 
   setInterval(async () => {
     try {
+      const now = Date.now();
+
+      // Too many consecutive failed auto-restarts → stop and wait for manual
+      // action (session is likely logged out; admin panel shows the QR).
+      if (autoRestartBlocked()) {
+        if (botState.status !== 'online' && !blockedLogged) {
+          blockedLogged = true;
+          console.log('⛔ Auto-restart blocked: session failed 3 restarts in a row — open Admin Panel → WhatsApp Login to re-pair.');
+        }
+        return;
+      }
+      blockedLogged = false;
+
       if (botState.status !== 'online') {
-        if (botState.lastOnline && Date.now() - botState.lastOnline > 10 * 60 * 1000) {
-          console.log('⏰ Watchdog: bot offline for >10min — restarting');
-          softRestart(client, 'watchdog offline');
+        const initStuck = botState.initStartedAt && now - botState.initStartedAt > 10 * 60 * 1000;
+        const wasOnline = botState.lastOnline && now - botState.lastOnline > 10 * 60 * 1000;
+        if ((initStuck || wasOnline) && now - lastRestartAt > 3 * 60 * 1000) {
+          lastRestartAt = now;
+          recordRestartAttempt();
+          console.log('⏰ Watchdog: bot stuck (not online) — restarting');
+          softRestart(client, 'watchdog stuck');
         }
         return;
       }
@@ -142,7 +173,9 @@ async function main() {
         client.pupPage.evaluate(() => 1).then(() => true).catch(() => false),
         new Promise((res) => setTimeout(() => res(false), 30000))
       ]);
-      if (!alive) {
+      if (!alive && now - lastRestartAt > 3 * 60 * 1000) {
+        lastRestartAt = now;
+        recordRestartAttempt();
         console.log('⏰ Watchdog: browser unresponsive — restarting');
         softRestart(client, 'watchdog browser-unresponsive');
       }
@@ -154,11 +187,8 @@ async function main() {
 
   console.log('📱 Starting WhatsApp client...\n');
 
-  try {
-    await client.initialize();
-  } catch (e) {
-    console.error('❌ Client init error:', e.message);
-  }
+  const { safeInitialize } = require('./src/bot/whatsapp');
+  await safeInitialize();
 }
 
 main().catch(console.error);

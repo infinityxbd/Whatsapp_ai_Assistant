@@ -539,13 +539,8 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
     case '/restart': {
       await reply(message, '🔄 Restarting bot...', client);
       console.log('🔄 Restart triggered via /restart command');
-      setTimeout(() => {
-        const { spawn } = require('child_process');
-        const cwd = require('path').join(__dirname, '..', '..');
-        const child = spawn('node', ['index.js'], { detached: true, stdio: 'ignore', cwd });
-        child.unref();
-        process.exit(0);
-      }, 800);
+      const { softRestart } = require('./restart');
+      softRestart(client, '/restart command');
       return true;
     }
 
@@ -701,12 +696,8 @@ async function handleCommand(message, client, botWid, lidMap, commandSenderId) {
         execSync('npm install --production', { cwd, timeout: 60000 });
         await reply(message, '✅ Update complete! Restarting...', client);
         console.log('✅ /update complete, restarting...');
-        setTimeout(() => {
-          const { spawn } = require('child_process');
-          const child = spawn('node', ['index.js'], { detached: true, stdio: 'ignore', cwd });
-          child.unref();
-          process.exit(0);
-        }, 800);
+        const { softRestart } = require('./restart');
+        softRestart(client, '/update');
       } catch (e) {
         await reply(message, `❌ Update failed: ${e.message.substring(0, 200)}`, client);
         console.error('❌ /update failed:', e.message);
