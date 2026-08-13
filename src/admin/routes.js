@@ -382,53 +382,101 @@ function createRoutes(botState, client) {
     res.json({ connected, info: info || null });
   });
 
+  // Normalize the phone number so pairing works no matter how it was typed:
+  //   +8801XXXXXXXXX / 8801XXXXXXXXX → 8801XXXXXXXXX (kept as-is)
+  //   01XXXXXXXXX                    → 8801XXXXXXXXX (country code 88 added)
+  //   1XXXXXXXXX                     → 8801XXXXXXXXX (bare national number)
+  // Everything else is passed through unchanged.
+  const normalizePhone = (input) => {
+    const digits = String(input || '').trim().replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.startsWith('880')) return digits; // already full international
+    if (digits.startsWith('88')) return digits;  // already has country code
+    if (digits.startsWith('0')) return '88' + digits; // 01XXXXXXXXX → 8801XXXXXXXXX
+    if (/^1\d{9}$/.test(digits)) return '880' + digits; // 1XXXXXXXXX → 8801XXXXXXXXX
+    return digits;
+  };
+
   router.post('/api/whatsapp/pair', async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) {
       return res.status(400).json({ error: 'Phone number is required' });
     }
-    const cleanNumber = phoneNumber.trim().replace(/\D/g, '');
+    const cleanNumber = normalizePhone(phoneNumber);
     if (cleanNumber.length < 10) {
       return res.status(400).json({ error: 'Invalid phone number' });
     }
 
-    // If client page is closed or crashed, reinit first
-    const pageClosed = !client.pupPage || client.pupPage.isClosed();
-    if (pageClosed) {
-      console.log('🔄 Client page closed — reinitializing...');
+    // The pairing API only exists after the WhatsApp web app has fully booted
+    // and wwjs injected window.AuthStore. When the session's IndexedDB is
+    // corrupt the app crashes at boot (Invariant #56367), AuthStore is never
+    // injected and requestPairingCode dies with "Cannot read properties of
+    // undefined (reading 'PairingCodeLinkUtils')" / "Target closed". So
+    // instead of waiting for the page to merely be OPEN, we wait for the
+    // pairing API itself — and if it's missing, restart the client with a
+    // clean (IndexedDB-wiped) profile before retrying.
+    const pairingApiReady = () => {
+      if (!client.pupPage || client.pupPage.isClosed()) return Promise.resolve(false);
+      return Promise.race([
+        client.pupPage.evaluate(() => !!(window.AuthStore && window.AuthStore.PairingCodeLinkUtils)),
+        new Promise((r) => setTimeout(() => r(false), 10000))
+      ]).catch(() => false);
+    };
+
+    let ready = await pairingApiReady();
+    if (!ready) {
+      console.log('🔄 WhatsApp page not pairing-ready — restarting client with clean storage...');
       try { await client.destroy(); } catch (e) {}
       botState.status = 'offline';
       await new Promise(r => setTimeout(r, 2000));
-      try { await cleanupForStart(); } catch (e) {}
+      try { await cleanupForStart({ resetStorage: true }); } catch (e) {}
       const { safeInitialize } = require('../bot/whatsapp');
       await safeInitialize();
-    }
-
-    // Wait up to 20s for client to be ready
-    let ready = false;
-    for (let i = 0; i < 40; i++) {
-      if (client && client.pupPage && !client.pupPage.isClosed()) {
-        ready = true;
-        break;
+      // Wait up to 20s for the pairing API to appear after the clean restart
+      for (let i = 0; i < 40; i++) {
+        if (await pairingApiReady()) { ready = true; break; }
+        await new Promise(r => setTimeout(r, 500));
       }
-      await new Promise(r => setTimeout(r, 500));
     }
 
     if (!ready) {
-      return res.status(500).json({ error: 'Client not ready. Wait a moment and try again.' });
+      return res.status(500).json({ error: 'WhatsApp page is not ready (web app crash loop). Use WhatsApp Logout and try pairing again, or restart the bot.' });
     }
 
-    // Extra wait for page to stabilize
-    await new Promise(r => setTimeout(r, 2000));
+    // A pairing request can legitimately take a while (the page may still be
+    // booting), but a hung page must never block the request forever.
+    const pairingTimeout = (ms) => new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Pairing timed out — try again in a moment')), ms)
+    );
 
     try {
-      const code = await client.requestPairingCode(cleanNumber);
+      const code = await Promise.race([
+        client.requestPairingCode(cleanNumber),
+        pairingTimeout(90000)
+      ]);
       const formatted = code.match(/.{1,4}/g).join('-');
       console.log(`🔑 Pairing code requested for ${cleanNumber}: ${formatted}`);
       res.json({ success: true, code: formatted });
     } catch (e) {
-      console.error('❌ Pairing failed:', e.message || e);
-      res.status(500).json({ error: e.message || 'Pairing failed. Try again.' });
+      const msg = e.message || e;
+      console.error('❌ Pairing failed:', msg);
+
+      // The page itself hung (CDP protocol timeout, crashed tab, destroyed
+      // execution context). The page is unusable now — restart the client
+      // with a clean profile so the NEXT attempt starts fresh, instead of
+      // every retry hitting the same stuck page.
+      if (/timed out|Target closed|Execution context was destroyed|Protocol error/i.test(String(msg))) {
+        console.log('🔄 Page hang detected — restarting client with clean storage...');
+        try { await client.destroy(); } catch (err) {}
+        botState.status = 'offline';
+        await new Promise(r => setTimeout(r, 2000));
+        try { await cleanupForStart({ resetStorage: true }); } catch (err) {}
+        const { safeInitialize } = require('../bot/whatsapp');
+        await safeInitialize();
+        return res.status(500).json({ error: 'WhatsApp page was busy and timed out. Bot restarted cleanly — click Get Pairing Code again.' });
+      }
+
+      res.status(500).json({ error: msg || 'Pairing failed. Try again.' });
     }
   });
 

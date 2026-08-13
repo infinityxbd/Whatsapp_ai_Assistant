@@ -175,6 +175,38 @@ function wipeSessionCaches(deep) {
   }
 }
 
+// Wipe the session's IndexedDB. The WhatsApp web app keeps its user-prefs
+// store ("allUserPrefsIdb") here. An unclean Chrome kill (SIGKILL from the
+// watchdog / auto-restart while the browser is writing) can corrupt it, after
+// which web.whatsapp.com crashes at boot with "Invariant Violation: Minified
+// invariant #56367" inside getUserPrefsTable/allUserPrefsIdb. The crash takes
+// the whole page down, so AuthStore is never injected and pairing fails with
+// "Cannot read properties of undefined (reading 'PairingCodeLinkUtils')" and
+// "Target closed". The app rebuilds this store from scratch on next boot.
+// Only safe when NO browser is running against the profile.
+function wipeSessionIdb() {
+  const sessionDir = path.join(BASE_DIR, '.wwebjs_auth', 'session');
+  const idb = path.join(sessionDir, 'Default', 'IndexedDB');
+  if (fs.existsSync(idb)) {
+    try { fs.rmSync(idb, { recursive: true, force: true }); } catch (e) {}
+    return true;
+  }
+  return false;
+}
+
+// True when the previous run never reached online — the session profile may
+// hold a corrupt WhatsApp IndexedDB. Reads the same restart_stats.json the
+// watchdog writes (fails is incremented before every auto soft-restart and
+// reset to 0 as soon as the bot comes online).
+function previousRunFailed() {
+  try {
+    const stats = JSON.parse(fs.readFileSync(path.join(BASE_DIR, 'data', 'restart_stats.json'), 'utf-8'));
+    return (stats.fails || 0) >= 1;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Periodic auto-clean — safe to run while the bot is LIVE. Only handles the
 // library media cache and orphaned Chrome processes. Never touches the running
 // browser's profile (no lock deletion, no Service Worker / Storage wipe), so a
@@ -195,7 +227,13 @@ function autoClean() {
 // Guarantees the old browser is fully dead and the profile is unlocked before
 // a new instance launches, which prevents the "authenticated but contacts
 // never load / bot never goes online" state after a soft restart.
-async function cleanupForStart() {
+//
+// options.resetStorage — also wipe the session IndexedDB (used before
+// re-pairing, so the WhatsApp web app always boots clean). Additionally, a
+// recovery-mode IndexedDB wipe runs automatically whenever the previous run
+// failed to come online (restart_stats.fails >= 1) — a healthy, online session
+// never gets its storage touched.
+async function cleanupForStart(options = {}) {
   const killed = killBotChrome();
   if (killed) {
     // Give the processes time to die and release profile locks
@@ -204,6 +242,11 @@ async function cleanupForStart() {
   removeStaleLocks();
   wipeSessionCaches(true);
   wipeLibraryCache();
+  if (options.resetStorage === true || previousRunFailed()) {
+    if (wipeSessionIdb()) {
+      console.log('🧹 Session IndexedDB cleared (recovery — web app crashed on last boot)');
+    }
+  }
   return true;
 }
 

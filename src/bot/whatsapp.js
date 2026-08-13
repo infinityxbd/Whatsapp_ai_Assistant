@@ -129,6 +129,11 @@ const puppeteerConfig = {
   args,
   defaultViewport: { width: 1280, height: 720 },
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  // WhatsApp page ops (pairing code generation, LID lookups, etc.) can take
+  // a while on slow VPSes — the default 180s CDP protocol timeout is not
+  // always enough and shows up as "Runtime.callFunctionOn timed out" when
+  // requesting a pairing code. 5 minutes gives every call room to finish.
+  protocolTimeout: 300000,
 };
 
 if (chromePath) {

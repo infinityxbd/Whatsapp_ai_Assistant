@@ -868,9 +868,10 @@
           <div class="info-banner" style="background:rgba(248,81,73,0.08);border-color:rgba(248,81,73,0.15);">
             ⚠️ WhatsApp is not connected. Enter your number below to get a pairing code.
           </div>
-          <label>Your WhatsApp Number (with country code)</label>
-          <input type="text" id="waPhoneNumber" placeholder="8801XXXXXXXXX" maxlength="15">
-          <br><br>
+          <label>Your WhatsApp Number</label>
+          <input type="text" id="waPhoneNumber" placeholder="01XXXXXXXXX or 8801XXXXXXXXX or +8801XXXXXXXXX" maxlength="20">
+          <div style="font-size:12px;color:#8b949e;margin-top:6px;">88 দিয়ে, +88 দিয়ে, বা 01 দিয়ে — যেকোনো format-এ দিলেই হবে</div>
+          <br>
           <button class="btn btn-primary btn-full" onclick="requestPairingCode()" id="pairBtn">
             🔑 Get Pairing Code
           </button>

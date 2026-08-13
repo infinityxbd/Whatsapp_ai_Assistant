@@ -140,18 +140,41 @@ install_deb() {
 
     warn "Installing ${#missing[@]} missing packages..."
 
+    # Refresh package lists first — required on a fresh VPS. Fail LOUDLY here
+    # so a broken apt setup is never silently swallowed (the old script
+    # continued anyway, and the bot then crashed with "error while loading
+    # shared libraries: libasound.so.2").
+    if ! asRoot apt-get update -qq &>/tmp/bot-apt-update.log; then
+        warn "apt-get update failed — log tail:"
+        tail -n 6 /tmp/bot-apt-update.log 2>/dev/null | sed 's/^/    /'
+        warn "Continuing anyway — installs may fail if package lists are empty."
+    fi
+
     # Batch first (fast). --no-install-recommends keeps the install small,
     # which matters on low-RAM / low-bandwidth VPSes.
-    if asRoot apt-get update -qq && asRoot apt-get install -y -qq --no-install-recommends "${missing[@]}" &>/tmp/bot-apt-batch.log; then
+    if asRoot apt-get install -y -qq --no-install-recommends "${missing[@]}" &>/tmp/bot-apt-batch.log; then
         ok "Installed ${#missing[@]} system packages"
         return 0
     fi
 
-    warn "Batch install failed — installing packages individually..."
+    warn "Batch install failed — retrying with --fix-missing:"
+    tail -n 6 /tmp/bot-apt-batch.log 2>/dev/null | sed 's/^/    /'
+    if asRoot apt-get install -y -qq --no-install-recommends --fix-missing "${missing[@]}" &>/tmp/bot-apt-batch2.log; then
+        ok "Installed ${#missing[@]} system packages (--fix-missing)"
+        return 0
+    fi
+
+    # Debian 13+ (trixie) and Ubuntu 24.04 renamed many libraries with a t64
+    # suffix (libasound2 → libasound2t64, libnss3 → libnss3t64, ...). If the
+    # plain name does not exist, try its t64 variant.
+    warn "Batch failed — installing packages individually (with t64 fallback)..."
     local okc=0 failc=0
     for pkg in "${missing[@]}"; do
         if asRoot apt-get install -y -qq --no-install-recommends "$pkg" &>/tmp/bot-apt-single.log; then
             okc=$((okc + 1))
+        elif asRoot apt-get install -y -qq --no-install-recommends "${pkg}t64" &>/tmp/bot-apt-single.log; then
+            okc=$((okc + 1))
+            ok "  Installed ${pkg}t64 (t64 variant of $pkg)"
         else
             failc=$((failc + 1))
             warn "  Could not install $pkg (continuing)"
@@ -159,6 +182,49 @@ install_deb() {
     done
     [ "$okc" -gt 0 ] && ok "Installed $okc packages"
     [ "$failc" -gt 0 ] && warn "$failc package(s) skipped"
+}
+
+# ── Library repair helpers ──
+# Install one library package, falling back to its Debian t64 variant
+# (Debian 13+ / Ubuntu 24.04 renamed libasound2 → libasound2t64 etc.).
+install_lib() {
+    local pkg="$1"
+    if asRoot apt-get install -y -qq --no-install-recommends "$pkg" &>/tmp/bot-lib.log; then
+        return 0
+    fi
+    if [ "$pkg" != "${pkg}t64" ] && asRoot apt-get install -y -qq --no-install-recommends "${pkg}t64" &>/tmp/bot-lib.log; then
+        return 0
+    fi
+    return 1
+}
+
+# Run ldd on a chrome binary and install whatever shared library it is
+# missing, mapping the .so name to its Debian package (with t64 fallback).
+# Works for BOTH the distro Chromium AND the Puppeteer-cached Chrome — the
+# old script only repaired the system one, which is why fresh Debian installs
+# ended up with /root/.cache/puppeteer/.../chrome failing to load libasound.so.2.
+repair_chrome_libs() {
+    local bin="$1" so deb="" m missing_libs=0
+    [ -x "$bin" ] || return 1
+    command -v ldd >/dev/null 2>&1 || return 0
+    for so in $(ldd "$bin" 2>/dev/null | awk '/not found/{print $1}'); do
+        missing_libs=1
+        deb=""
+        for m in "${SO_TO_DEB[@]}"; do
+            if [ "${m%%:*}" = "$so" ]; then deb="${m##*:}"; break; fi
+        done
+        if [ -n "$deb" ]; then
+            if install_lib "$deb"; then
+                warn "  Installed $deb (was missing: $so)"
+            else
+                warn "  Could not install $deb (missing: $so)"
+            fi
+        else
+            warn "  No package mapping for $so"
+        fi
+    done
+    [ "$missing_libs" = "0" ] && return 0
+    return 1
 }
 
 install_rpm() {
@@ -249,9 +315,15 @@ while IFS= read -r bin; do
     if chrome_launch_ok "$bin"; then
         ok "Browser OK: $bin"
     else
-        warn "Broken/corrupt browser build detected, removing: $(dirname "$bin")"
-        rm -rf "$(dirname "$bin")" 2>/dev/null
-        CORRUPT_REMOVED=$((CORRUPT_REMOVED + 1))
+        warn "Browser $bin cannot launch — repairing missing shared libraries..."
+        repair_chrome_libs "$bin"
+        if chrome_launch_ok "$bin"; then
+            ok "Browser fixed: $bin"
+        else
+            warn "Broken/corrupt browser build detected, removing: $(dirname "$bin")"
+            rm -rf "$(dirname "$bin")" 2>/dev/null
+            CORRUPT_REMOVED=$((CORRUPT_REMOVED + 1))
+        fi
     fi
 done < <(find_cached_chrome | sort -u)
 
@@ -284,28 +356,12 @@ if [ -n "$SYS_CHROME" ]; then
         ok "System Chrome ready: $SYS_CHROME"
     else
         warn "System Chrome at $SYS_CHROME cannot launch (missing libs) — fixing..."
-        if [ "$PM" = "apt-get" ]; then
-            # Install whatever the binary is still missing.
-            missing=()
-            while IFS= read -r line; do
-                so=$(echo "$line" | awk '{print $1}')
-                [ -n "$so" ] && missing+=("$so")
-            done < <(ldd "$SYS_CHROME" 2>/dev/null | grep "not found" || true)
-            to_install=()
-            for e in "${missing[@]}"; do
-                for m in "${SO_TO_DEB[@]}"; do
-                    if [ "${m%%:*}" = "$e" ]; then
-                        to_install+=("${m##*:}")
-                        break
-                    fi
-                done
-            done
-            if [ ${#to_install[@]} -gt 0 ]; then
-                asRoot apt-get install -y -qq "${to_install[@]}" &>/tmp/bot-fix.log || true
-            fi
+        repair_chrome_libs "$SYS_CHROME"
+        if chrome_launch_ok "$SYS_CHROME"; then
+            ok "System Chrome fixed"
+        else
+            warn "System Chrome still not launching — will rely on Puppeteer browser"
         fi
-        chrome_launch_ok "$SYS_CHROME" && ok "System Chrome fixed" \
-            || warn "System Chrome still not launching — will rely on Puppeteer browser"
     fi
 fi
 
@@ -319,6 +375,22 @@ if ! command -v chromium >/dev/null 2>&1 \
         fail "Could not obtain a working browser. Re-run this script once network is stable."
     else
         ok "Puppeteer Chrome downloaded"
+        # A freshly downloaded Chrome still needs the system libraries to
+        # launch — install whatever ldd reports missing, then verify it runs.
+        while IFS= read -r bin; do
+            [ -z "$bin" ] && continue
+            if chrome_launch_ok "$bin"; then
+                ok "Browser OK: $bin"
+            else
+                warn "Fixing shared libraries for $bin..."
+                repair_chrome_libs "$bin"
+                if chrome_launch_ok "$bin"; then
+                    ok "Browser fixed: $bin"
+                else
+                    warn "Browser still cannot launch: $bin"
+                fi
+            fi
+        done < <(find_cached_chrome | sort -u)
     fi
 fi
 
