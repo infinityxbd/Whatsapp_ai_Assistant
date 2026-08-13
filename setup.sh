@@ -477,6 +477,7 @@ WHATSAPP_PHONE=your-phone-number
 ADMIN_PORT=3001
 DEFAULT_ADMIN_PASSWORD=admin123
 SESSION_SECRET=${SESSION_SEC}
+RESTART_INTERVAL_HOURS=4
 EOF
     ok "Created .env with defaults (edit WHATSAPP_PHONE in .env)"
 else

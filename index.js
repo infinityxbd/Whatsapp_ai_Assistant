@@ -23,7 +23,7 @@ const bcrypt = require('bcryptjs');
 const { readJSON, writeJSON } = require('./src/storage/store');
 const createAdminServer = require('./src/admin/server');
 const { cleanupForStart } = require('./src/bot/cache');
-const { softRestart, recordRestartAttempt, autoRestartBlocked } = require('./src/bot/restart');
+const { softRestart, recordRestartAttempt } = require('./src/bot/restart');
 
 async function initDataFiles() {
   let config = readJSON('config.json');
@@ -109,81 +109,33 @@ async function main() {
     console.log('🔐 Password: ' + (process.env.DEFAULT_ADMIN_PASSWORD || 'admin123') + '\n');
   });
 
-  // ─── Auto soft restart every 1 hour (keeps session + all data) ───
-  const autoRestartHours = parseFloat(process.env.AUTO_RESTART_HOURS) || 1;
-  const autoRestartInterval = autoRestartHours * 60 * 60 * 1000;
-  let lastRestartAt = 0;
-  let blockedLogged = false;
+  // ─── Full restart every N hours (default 4h) — the ONLY auto-restart ───
+  // The old hourly auto soft-restart and the 24/7 watchdog auto-restarts are
+  // disabled — they kept interrupting the session. Instead the bot simply
+  // stops and starts again on a fixed schedule: session data is kept, Chrome
+  // is killed and relaunched fresh, so a long-running bot gets a clean slate
+  // every few hours without constant small restarts.
+  // A scheduled restart only counts as a "failed cycle" (which triggers the
+  // recovery IndexedDB wipe on the next boot) when the bot was OFFLINE at the
+  // time — a healthy online bot restarts without touching its session at all.
+  const restartIntervalHours = parseFloat(process.env.RESTART_INTERVAL_HOURS) || 4;
+  const restartInterval = restartIntervalHours * 60 * 60 * 1000;
+  const HEALTHY_RECENT_MS = 30 * 60 * 1000; // online within the last 30 min = healthy
   setInterval(() => {
-    if (botState.status !== 'online') return;
-    if (autoRestartBlocked()) return;
-    lastRestartAt = Date.now();
-    recordRestartAttempt();
-    console.log('⏰ Hourly auto soft restart triggered');
-    softRestart(client, 'hourly auto-restart');
-  }, autoRestartInterval);
-  console.log(`⏰ Auto soft restart scheduled every ${autoRestartHours}h`);
+    const healthyRecently = botState.lastOnline && (Date.now() - botState.lastOnline) < HEALTHY_RECENT_MS;
+    if (botState.status !== 'online' && !healthyRecently) {
+      recordRestartAttempt();
+    }
+    console.log(`⏰ Scheduled full restart (every ${restartIntervalHours}h)`);
+    softRestart(client, 'scheduled full restart');
+  }, restartInterval);
+  console.log(`⏰ Auto-restarts disabled — full restart every ${restartIntervalHours}h`);
 
-  // ─── 24/7 Watchdog: never lets the bot stay "asleep" ───
-  // Checks every 5 min. Restarts if:
-  //   1. The bot was online before but has been offline for 10+ min
-  //      (e.g. a browser crash the auto-reconnect could not recover).
-  //   2. The bot claims to be online but the browser page is actually
-  //      unresponsive (silent freeze — no message events anymore).
-  //   3. The bot never reached online after starting (stuck at the loading
-  //      screen — "authenticated but contacts don't load"). This is the
-  //      post-soft-restart "sleep mode" nobody could recover from before.
-  // The consecutive-restart counter (reset on every successful online) makes
-  // sure a genuinely broken session never causes an endless restart loop.
   // ─── User Memory System: prune inactive profiles daily ───
   setInterval(() => {
     try { require('./src/memory/service').prune(); } catch (e) {}
   }, 24 * 60 * 60 * 1000);
   console.log('🧠 User Memory System active (daily prune enabled)');
-
-  setInterval(async () => {
-    try {
-      const now = Date.now();
-
-      // Too many consecutive failed auto-restarts → stop and wait for manual
-      // action (session is likely logged out; admin panel shows the QR).
-      if (autoRestartBlocked()) {
-        if (botState.status !== 'online' && !blockedLogged) {
-          blockedLogged = true;
-          console.log('⛔ Auto-restart blocked: session failed 3 restarts in a row — open Admin Panel → WhatsApp Login to re-pair.');
-        }
-        return;
-      }
-      blockedLogged = false;
-
-      if (botState.status !== 'online') {
-        const initStuck = botState.initStartedAt && now - botState.initStartedAt > 10 * 60 * 1000;
-        const wasOnline = botState.lastOnline && now - botState.lastOnline > 10 * 60 * 1000;
-        if ((initStuck || wasOnline) && now - lastRestartAt > 3 * 60 * 1000) {
-          lastRestartAt = now;
-          recordRestartAttempt();
-          console.log('⏰ Watchdog: bot stuck (not online) — restarting');
-          softRestart(client, 'watchdog stuck');
-        }
-        return;
-      }
-
-      // Online → verify the browser page is really alive
-      const alive = await Promise.race([
-        client.pupPage.evaluate(() => 1).then(() => true).catch(() => false),
-        new Promise((res) => setTimeout(() => res(false), 30000))
-      ]);
-      if (!alive && now - lastRestartAt > 3 * 60 * 1000) {
-        lastRestartAt = now;
-        recordRestartAttempt();
-        console.log('⏰ Watchdog: browser unresponsive — restarting');
-        softRestart(client, 'watchdog browser-unresponsive');
-      }
-    } catch (e) {
-      console.log('⏰ Watchdog check error:', e.message);
-    }
-  }, 5 * 60 * 1000);
-  console.log('⏰ 24/7 Watchdog enabled (checks every 5 min)');
 
   console.log('📱 Starting WhatsApp client...\n');
 

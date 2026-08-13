@@ -228,8 +228,10 @@ ADMIN_PORT=3001
 DEFAULT_ADMIN_PASSWORD=admin123
 SESSION_SECRET=your-random-string-here
 
-# Auto soft restart interval (hours, default 1)
-AUTO_RESTART_HOURS=1
+# Full restart interval in hours (default 4) — bot stops and auto-starts
+# every N hours. All other auto-restarts (hourly soft restart, watchdog)
+# are disabled.
+RESTART_INTERVAL_HOURS=4
 ```
 
 ---
